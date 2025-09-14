@@ -1,7 +1,5 @@
 import streamlit as st
 from gradio_client import Client, file as gr_file
-import json
-import base64
 import tempfile
 from pathlib import Path
 
@@ -20,12 +18,11 @@ space_url = st.sidebar.text_input(
     value="https://tencent-songgeneration.hf.space/",
     help="URL du Space Gradio/HF. Par défaut celle fournie."
 )
-api_name = st.sidebar.text_input("/generate endpoint", value="/generate_song")
+api_name = st.sidebar.text_input("Endpoint", value="/generate_song")
 
 st.sidebar.markdown("---")
 st.sidebar.header("Options de génération")
 default_genre = st.sidebar.selectbox("Genre par défaut", ["Pop", "Rock", "Hip-Hop", "R&B", "Electronic", "Folk"])
-st.sidebar.write("Astuce : ajuste `cfg_coef`, `temperature` et `top_k` pour plus/moins de créativité.")
 
 # --- Main form ---
 with st.form(key="gen_form"):
@@ -88,12 +85,11 @@ if submit:
     else:
         client = Client(space_url)
         st.info("Envoi de la requête au modèle...")
-        with st.spinner("Génération en cours… cela peut prendre quelques secondes"):
+        with st.spinner("Génération en cours… cela peut prendre du temps"):
             try:
                 # Préparer prompt_audio si présent
                 prompt_audio_arg = None
                 if uploaded_audio is not None:
-                    # Sauvegarder temporairement et utiliser gradio_client.file
                     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_audio.name).suffix)
                     tmp.write(uploaded_audio.getbuffer())
                     tmp.flush()
@@ -113,78 +109,32 @@ if submit:
                 )
 
                 st.success("Réponse reçue du modèle.")
-                # Afficher le résultat brut (utile pour debug)
                 st.subheader("Réponse brute")
-                try:
-                    st.json(result)
-                except Exception:
-                    st.write(result)
+                st.write(result)
 
-                # Tenter d'extraire une sortie audio si existante
-                # Le format renvoyé par Gradio Space peut être :
-                # - une chaîne / dictionnaire contenant un chemin/url
-                # - un blob audio encodé (base64) ou un chemin côté serveur
+                # ---- Extraction du fichier audio ----
                 audio_found = False
 
-                # Si c'est un dict, parcourir à la recherche de clé plausible
-                if isinstance(result, dict):
-                    # Cherche clés contenant "audio", "wav", "audio_path", "output_audio"
-                    for k, v in result.items():
-                        lk = k.lower()
-                        if "audio" in lk or "wav" in lk or "path" in lk:
-                            if isinstance(v, str) and v.strip():
-                                # si c'est une URL (commence par http) => afficher le lien
-                                if v.startswith("http"):
-                                    st.markdown(f"**Audio URL ({k}) :** {v}")
-                                    st.audio(v)
-                                    audio_found = True
-                                    break
-                                # si c'est base64 data:audio/...
-                                if v.startswith("data:audio"):
-                                    # extraire base64 portion
-                                    parts = v.split(",", 1)
-                                    if len(parts) == 2:
-                                        b64 = parts[1]
-                                        try:
-                                            data = base64.b64decode(b64)
-                                            st.audio(data)
-                                            audio_found = True
-                                            break
-                                        except Exception:
-                                            pass
-                                # si c'est un chemin local côté Space (ex: /tmp/...), on ne peut pas y accéder directement.
-                                # afficher le chemin pour debug
-                                st.write(f"Audio (clé `{k}`) : {v}")
-                                audio_found = True
-                                # try to show if it's a relative URL
-                                if v.startswith("/"):
-                                    full = space_url.rstrip("/") + v
-                                    st.markdown(f"Possible URL: {full}")
-                                    try:
-                                        st.audio(full)
-                                    except Exception:
-                                        pass
-                                break
+                if isinstance(result, (list, tuple)) and len(result) > 0:
+                    first_item = result[0]
+                    if isinstance(first_item, str) and first_item.startswith("/tmp/gradio"):
+                        try:
+                            local_path = client.download(first_item)  # téléchargement du wav
+                            st.audio(local_path)
 
-                # si résultat est une liste, parcourir
-                if not audio_found and isinstance(result, (list, tuple)):
-                    for item in result:
-                        if isinstance(item, str) and item.startswith("http"):
-                            st.audio(item)
+                            with open(local_path, "rb") as f:
+                                st.download_button(
+                                    "⬇️ Télécharger l'audio",
+                                    data=f,
+                                    file_name="generated_song.wav",
+                                    mime="audio/wav"
+                                )
                             audio_found = True
-                            break
-                        if isinstance(item, dict):
-                            for k, v in item.items():
-                                if isinstance(v, str) and v.startswith("http"):
-                                    st.audio(v)
-                                    audio_found = True
-                                    break
-                        if audio_found:
-                            break
+                        except Exception as e:
+                            st.error(f"Impossible de télécharger le fichier audio : {e}")
 
-                # si rien d'audio trouvé, afficher message
                 if not audio_found:
-                    st.info("Aucun fichier audio détecté dans la réponse. Vérifie le contenu JSON ci-dessus.")
+                    st.info("Aucun fichier audio exploitable détecté dans la réponse.")
 
             except Exception as e:
                 st.error("Erreur lors de l'appel au Space Gradio :")
