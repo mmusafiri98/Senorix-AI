@@ -56,33 +56,32 @@ if submit:
             # Client du modèle LLM (Apertus-8B)
             client_llm = Client("akhaliq/Apertus-8B-Instruct-2509")
 
-            # Prompt amélioré pour forcer le bon format
+            # Prompt strict
             prompt = f"""Tu es un parolier.
 Ta tâche est de générer des paroles de chanson à partir de cette description :
 Description : {description}
 
 ⚠️ Les règles sont strictes :
-- La chanson DOIT être structurée avec les tags suivants uniquement :
-  [intro-short], [intro-medium], [intro-long], [verse], [chorus], [bridge], 
-  [outro-short], [outro-medium], [outro-long], [inst-short], [inst-medium], [inst-long], [silence]
-- Commence OBLIGATOIREMENT par un tag valide (par exemple [intro-short] ou [verse]).
-- Chaque section doit être suivie de 1 à 6 lignes de texte.
-- Utilise plusieurs sections ([verse], [chorus], etc.).
-- N’écris rien d’autre que les paroles.
+- Utilise uniquement ces balises : [verse], [chorus], [bridge].
+- Tu peux commencer par [verse] ou [chorus].
+- N'utilise PAS [intro], [intro-short], [inst], [outro] ni leurs variantes (ils doivent rester vides, donc ne les écris pas).
+- Chaque section doit avoir 2 à 6 lignes de paroles.
+- La chanson doit avoir au moins 2 couplets ([verse]) et 1 refrain ([chorus]).
+- Ne génère rien d’autre que les paroles.
 
 Exemple correct :
 
-[intro-short]
-La nuit tombe doucement
-Les lumières brillent dans le vent
-
 [verse]
-Je marche seul dans la ville
-Ton souvenir reste fragile
+Je marche seul dans la nuit
+Ton souvenir brille dans ma vie
 
 [chorus]
 Oh mon cœur, reviens à moi
-Sans toi, je ne vis pas
+Sans toi je n’avance pas
+
+[verse]
+Les rues résonnent de ton absence
+Je cherche encore ton regard
 """
 
             # Génération des paroles par le LLM
@@ -93,12 +92,30 @@ Sans toi, je ne vis pas
 
             lyrics_text = lyrics_result if isinstance(lyrics_result, str) else str(lyrics_result)
 
-            # Post-traitement pour forcer un tag valide au début
-            valid_tags = ["[verse]", "[chorus]", "[bridge]", "[intro-short]", "[intro-medium]", "[intro-long]",
-                          "[outro-short]", "[outro-medium]", "[outro-long]", "[inst-short]", "[inst-medium]", "[inst-long]", "[silence]"]
-
+            # Post-traitement : s'assurer qu'un tag valide est au début
+            valid_tags = ["[verse]", "[chorus]", "[bridge]"]
             if not any(lyrics_text.strip().startswith(tag) for tag in valid_tags):
                 lyrics_text = "[verse]\n" + lyrics_text.strip()
+
+            # Post-traitement : suppression des sections interdites
+            forbidden_tags = ["[intro]", "[intro-short]", "[intro-medium]",
+                              "[inst]", "[inst-short]", "[inst-medium]",
+                              "[outro]", "[outro-short]", "[outro-medium]"]
+
+            lines = lyrics_text.splitlines()
+            cleaned = []
+            skip = False
+            for line in lines:
+                # Détection d'un tag interdit → on saute cette section
+                if any(line.strip().startswith(tag) for tag in forbidden_tags):
+                    skip = True
+                    continue
+                # Reprise si une nouvelle balise valide arrive
+                if skip and (line.strip().startswith("[") and line.strip().endswith("]")):
+                    skip = False
+                if not skip:
+                    cleaned.append(line)
+            lyrics_text = "\n".join(cleaned)
 
             st.success("✅ Paroles générées par le LLM")
             st.subheader("📜 Paroles générées")
