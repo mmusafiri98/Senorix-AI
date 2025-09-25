@@ -8,7 +8,7 @@ st.set_page_config(page_title="Senorix AI — Song Generation", layout="centered
 st.title("🎵 Senorix AI — Song Generation")
 st.markdown(
     "Cette app utilise **deux modèles** :\n"
-    "1. `akhaliq/Apertus-8B-Instruct-2509` pour générer les paroles en format `[verse]`, `[chorus]`, etc.\n"
+    "1. `akhaliq/Apertus-8B-Instruct-2509` pour générer automatiquement les paroles.\n"
     "2. `tencent-songgeneration` pour transformer ces paroles en chanson chantée."
 )
 
@@ -56,22 +56,49 @@ if submit:
             # Client du modèle LLM (Apertus-8B)
             client_llm = Client("akhaliq/Apertus-8B-Instruct-2509")
 
-            prompt = f"""Génère des paroles de chanson bien formatées avec sections [intro], [verse], [chorus], [outro] à partir de la description suivante :
+            # Prompt amélioré pour forcer le bon format
+            prompt = f"""Tu es un parolier.
+Ta tâche est de générer des paroles de chanson à partir de cette description :
 Description : {description}
-Format attendu :
+
+⚠️ Les règles sont strictes :
+- La chanson DOIT être structurée avec les tags suivants uniquement :
+  [intro-short], [intro-medium], [intro-long], [verse], [chorus], [bridge], 
+  [outro-short], [outro-medium], [outro-long], [inst-short], [inst-medium], [inst-long], [silence]
+- Commence OBLIGATOIREMENT par un tag valide (par exemple [intro-short] ou [verse]).
+- Chaque section doit être suivie de 1 à 6 lignes de texte.
+- Utilise plusieurs sections ([verse], [chorus], etc.).
+- N’écris rien d’autre que les paroles.
+
+Exemple correct :
+
+[intro-short]
+La nuit tombe doucement
+Les lumières brillent dans le vent
+
 [verse]
-...
+Je marche seul dans la ville
+Ton souvenir reste fragile
+
 [chorus]
-...
+Oh mon cœur, reviens à moi
+Sans toi, je ne vis pas
 """
 
+            # Génération des paroles par le LLM
             lyrics_result = client_llm.predict(
                 message=prompt,
                 api_name="/chat"
             )
 
-            # Nettoyage possible (texte brut)
             lyrics_text = lyrics_result if isinstance(lyrics_result, str) else str(lyrics_result)
+
+            # Post-traitement pour forcer un tag valide au début
+            valid_tags = ["[verse]", "[chorus]", "[bridge]", "[intro-short]", "[intro-medium]", "[intro-long]",
+                          "[outro-short]", "[outro-medium]", "[outro-long]", "[inst-short]", "[inst-medium]", "[inst-long]", "[silence]"]
+
+            if not any(lyrics_text.strip().startswith(tag) for tag in valid_tags):
+                lyrics_text = "[verse]\n" + lyrics_text.strip()
 
             st.success("✅ Paroles générées par le LLM")
             st.subheader("📜 Paroles générées")
@@ -128,5 +155,4 @@ Format attendu :
         except Exception as e:
             st.error("❌ Erreur pendant le workflow :")
             st.exception(e)
-
 
