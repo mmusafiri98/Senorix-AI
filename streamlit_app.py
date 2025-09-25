@@ -7,131 +7,126 @@ st.set_page_config(page_title="Senorix AI — Song Generation", layout="centered
 
 st.title("🎵 Senorix AI — Song Generation")
 st.markdown(
-    "Une interface simple pour appeler le modèle de génération de chansons via le Gradio Space.\n\n"
-    "Colle tes paroles (ou utilise le template), choisis des réglages, puis clique sur **Générer**."
+    "Cette app utilise **deux modèles** :\n"
+    "1. `akhaliq/Apertus-8B-Instruct-2509` pour générer les paroles en format `[verse]`, `[chorus]`, etc.\n"
+    "2. `tencent-songgeneration` pour transformer ces paroles en chanson chantée."
 )
 
 # --- Sidebar / settings ---
-st.sidebar.header("Paramètres API")
-space_url = st.sidebar.text_input(
-    "Gradio Space URL",
+st.sidebar.header("Paramètres API chanson")
+space_url_song = st.sidebar.text_input(
+    "Gradio Space URL (song model)",
     value="https://tencent-songgeneration.hf.space/",
-    help="URL du Space Gradio/HF. Par défaut celle fournie."
+    help="URL du Space Gradio/HF pour la génération de musique."
 )
-api_name = st.sidebar.text_input("/generate endpoint", value="/generate_song")
+api_name_song = st.sidebar.text_input("Endpoint chanson", value="/generate_song")
 
 st.sidebar.markdown("---")
-st.sidebar.header("Options de génération")
-default_genre = st.sidebar.selectbox("Genre par défaut", ["Pop", "Rock", "Hip-Hop", "R&B", "Electronic", "Folk"])
+st.sidebar.header("Options de génération (chanson)")
+genre = st.sidebar.selectbox("Genre", ["Pop", "Rock", "Hip-Hop", "R&B", "Electronic", "Folk", "Other"], index=0)
+cfg_coef = st.sidebar.number_input("cfg_coef", value=1.5, step=0.1, format="%.2f")
+temperature = st.sidebar.number_input("temperature", value=0.9, step=0.05, format="%.2f")
+top_k = st.sidebar.number_input("top_k", value=50, step=1, min_value=1)
 
 # --- Main form ---
 with st.form(key="gen_form"):
-    st.subheader("Paroles (lyric)")
-    lyric = st.text_area(
-        "Paroles",
-        value="""[intro-short]
-
-[verse]
-夜晚的街灯闪烁
-我漫步在熟悉的角落
-回忆像潮水般涌来
-你的笑容如此清晰
-在心头无法抹去
-那些曾经的甜蜜
-如今只剩我独自回忆
-
-[verse]
-手机屏幕亮起
-是你发来的消息
-简单的几个字
-却让我泪流满面
-曾经的拥抱温暖
-如今却变得遥远
-我多想回到从前
-重新拥有你的陪伴
-
-[chorus]
-回忆的温度还在
-你却已不在
-我的心被爱填满
-却又被思念刺痛
-音乐的节奏奏响
-我的心却在流浪
-没有你的日子
-我该如何继续向前
-
-[outro-short]""",
-        height=260
+    st.subheader("Description de la chanson")
+    description = st.text_area(
+        "Décris l’ambiance, le thème ou les émotions de la chanson (en français, anglais ou autre).",
+        value="Une chanson nostalgique sur l’amour perdu, style pop moderne.",
+        height=150
     )
 
-    description = st.text_input("Description (optionnelle)", value="")
     uploaded_audio = st.file_uploader(
-        "Prompt audio (optionnel) — mp3/wav",
+        "Prompt audio (optionnel, mp3/wav/ogg)",
         type=["mp3", "wav", "ogg"],
-        help="Envoyer un court extrait audio si le modèle supporte 'prompt_audio'."
+        help="Un court extrait audio si supporté par le modèle."
     )
-
-    genre = st.selectbox("Genre", options=["Pop", "Rock", "Hip-Hop", "R&B", "Electronic", "Folk", "Other"], index=0)
-    cfg_coef = st.number_input("cfg_coef", value=1.5, step=0.1, format="%.2f")
-    temperature = st.number_input("temperature", value=0.9, step=0.05, format="%.2f")
-    top_k = st.number_input("top_k", value=50, step=1, min_value=1)
 
     submit = st.form_submit_button("🎛️ Générer la chanson")
 
-# --- Predict / call API ---
+# --- Workflow : description → lyrics → chanson ---
 if submit:
-    if not lyric.strip():
-        st.warning("Veuillez fournir des paroles (lyric).")
+    if not description.strip():
+        st.warning("Veuillez fournir une description.")
     else:
-        client = Client(space_url)
-        st.info("Envoi de la requête au modèle...")
-        with st.spinner("Génération en cours… cela peut prendre quelques secondes"):
-            try:
-                # Préparer prompt_audio si présent
-                prompt_audio_arg = None
-                if uploaded_audio is not None:
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_audio.name).suffix)
-                    tmp.write(uploaded_audio.getbuffer())
-                    tmp.flush()
-                    tmp.close()
-                    prompt_audio_arg = gr_file(tmp.name)
+        try:
+            st.info("1️⃣ Génération des paroles à partir de la description...")
 
-                # Appel predict
-                result = client.predict(
-                    lyric=lyric,
-                    description=description or None,
-                    prompt_audio=prompt_audio_arg,
-                    genre=genre,
-                    cfg_coef=float(cfg_coef),
-                    temperature=float(temperature),
-                    top_k=int(top_k),
-                    api_name=api_name
-                )
+            # Client du modèle LLM (Apertus-8B)
+            client_llm = Client("akhaliq/Apertus-8B-Instruct-2509")
 
-                st.success("Réponse reçue du modèle.")
-                st.subheader("Réponse brute")
-                st.write(result)
+            prompt = f"""Génère des paroles de chanson bien formatées avec sections [intro], [verse], [chorus], [outro] à partir de la description suivante :
+Description : {description}
+Format attendu :
+[verse]
+...
+[chorus]
+...
+"""
 
-                # --- Gestion de l'audio ---
-                audio_found = False
-                if isinstance(result, (list, tuple)) and len(result) > 0:
-                    audio_path = result[0]
-                    if isinstance(audio_path, str) and audio_path.endswith(".wav"):
-                        st.audio(audio_path)  # ✅ joue le fichier audio renvoyé par Gradio
-                        with open(audio_path, "rb") as f:
-                            st.download_button(
-                                "⬇️ Télécharger l'audio",
-                                data=f.read(),
-                                file_name="generated_song.wav",
-                                mime="audio/wav"
-                            )
-                        audio_found = True
+            lyrics_result = client_llm.predict(
+                message=prompt,
+                api_name="/chat"
+            )
 
-                if not audio_found:
-                    st.info("Aucun fichier audio exploitable détecté dans la réponse.")
+            # Nettoyage possible (texte brut)
+            lyrics_text = lyrics_result if isinstance(lyrics_result, str) else str(lyrics_result)
 
-            except Exception as e:
-                st.error("Erreur lors de l'appel au Space Gradio :")
-                st.exception(e)
+            st.success("✅ Paroles générées par le LLM")
+            st.subheader("📜 Paroles générées")
+            st.text_area("Paroles", lyrics_text, height=260)
+
+            st.info("2️⃣ Génération de la chanson à partir des paroles...")
+
+            # Client du modèle de chanson
+            client_song = Client(space_url_song)
+
+            # Préparer prompt audio si présent
+            prompt_audio_arg = None
+            if uploaded_audio is not None:
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_audio.name).suffix)
+                tmp.write(uploaded_audio.getbuffer())
+                tmp.flush()
+                tmp.close()
+                prompt_audio_arg = gr_file(tmp.name)
+
+            # Appel du modèle de chanson
+            song_result = client_song.predict(
+                lyric=lyrics_text,
+                description=description,
+                prompt_audio=prompt_audio_arg,
+                genre=genre,
+                cfg_coef=float(cfg_coef),
+                temperature=float(temperature),
+                top_k=int(top_k),
+                api_name=api_name_song
+            )
+
+            st.success("✅ Réponse du modèle chanson")
+            st.subheader("Réponse brute (debug)")
+            st.write(song_result)
+
+            # Gestion de l’audio
+            audio_found = False
+            if isinstance(song_result, (list, tuple)) and len(song_result) > 0:
+                audio_path = song_result[0]
+                if isinstance(audio_path, str) and audio_path.endswith(".wav"):
+                    st.audio(audio_path)
+                    with open(audio_path, "rb") as f:
+                        st.download_button(
+                            "⬇️ Télécharger l'audio",
+                            data=f.read(),
+                            file_name="generated_song.wav",
+                            mime="audio/wav"
+                        )
+                    audio_found = True
+
+            if not audio_found:
+                st.info("ℹ️ Aucun fichier audio exploitable détecté.")
+
+        except Exception as e:
+            st.error("❌ Erreur pendant le workflow :")
+            st.exception(e)
 
 
