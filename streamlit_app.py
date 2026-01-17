@@ -13,16 +13,16 @@ st.set_page_config(
 )
 
 # ===============================
-# CUSTOM CSS
+# CSS
 # ===============================
 st.markdown("""
 <style>
 .main-header {
     text-align: center;
     padding: 20px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #667eea, #764ba2);
     color: white;
-    border-radius: 10px;
+    border-radius: 12px;
     margin-bottom: 30px;
 }
 .stButton>button {
@@ -31,37 +31,26 @@ st.markdown("""
     color: white;
     font-weight: bold;
     border-radius: 10px;
-    padding: 15px;
-    font-size: 16px;
-}
-.stButton>button:hover {
-    background-color: #764ba2;
+    padding: 14px;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown(
-    '<div class="main-header">'
-    '<h1>🎵 Senorix AI — Song Generation</h1>'
-    '<p>Génération de chansons avec Intelligence Artificielle</p>'
-    '</div>',
-    unsafe_allow_html=True
-)
-
 st.markdown("""
-### Comment ça marche ?
-1. **Génération des paroles** : Qwen3-VL crée les paroles
-2. **Génération de la musique** : Tencent transforme les paroles en chanson
-""")
+<div class="main-header">
+<h1>🎵 Senorix AI — Song Generation</h1>
+<p>Lyrics con LLaMA-2 & Musica con Tencent</p>
+</div>
+""", unsafe_allow_html=True)
 
 # ===============================
 # SIDEBAR
 # ===============================
-st.sidebar.header("⚙️ Configuration")
+st.sidebar.header("⚙️ Configurazione")
 
 lyrics_mode = st.sidebar.radio(
-    "🎤 Génération des paroles",
-    ["🤖 Automatique (Qwen3-VL)", "✍️ Manuel"],
+    "🎤 Generazione parole",
+    ["🤖 Automatica (LLaMA-2)", "✍️ Manuale"],
     index=0
 )
 
@@ -73,7 +62,7 @@ space_url_song = st.sidebar.text_input(
 )
 
 api_name_song = st.sidebar.text_input(
-    "Endpoint API",
+    "Endpoint musica",
     value="/generate_song"
 )
 
@@ -81,170 +70,158 @@ api_name_song = st.sidebar.text_input(
 # FUNCTIONS
 # ===============================
 
-def generate_lyrics_with_qwen(description: str) -> str:
-    """
-    Génère les paroles avec Qwen3-VL-Demo
-    CORRECTION CLÉ : utilisation EXCLUSIVE de /chat
-    """
+def generate_lyrics_with_llama(description: str) -> str:
+    """Genera lyrics con LLaMA-2-13B-Chat"""
 
-    st.info("🔄 Connexion à Qwen3-VL-Demo...")
-    client = Client("Qwen/Qwen3-VL-Demo")
+    st.info("🔄 Connessione a LLaMA-2-13B-Chat...")
+    client = Client("huggingface-projects/llama-2-13b-chat")
 
-    prompt = f"""
-Tu es un parolier professionnel expert.
+    system_prompt = (
+        "You are a professional songwriter. "
+        "You write emotional, singable song lyrics."
+    )
 
-TÂCHE :
-Génère des paroles de chanson à partir de cette description :
+    user_prompt = f"""
+Write song lyrics based on this theme:
 
-\"{description}\"
+"{description}"
 
-RÈGLES STRICTES :
-- Utilise UNIQUEMENT [verse], [chorus], [bridge]
-- Commence par [verse] ou [chorus]
-- Minimum 2 [verse] et 1 [chorus]
-- 2 à 6 lignes par section
-- AUCUN autre texte
-
-Génère maintenant les paroles :
+STRICT RULES:
+- Use ONLY these tags: [verse], [chorus], [bridge]
+- Start with [verse] or [chorus]
+- At least 2 [verse] and 1 [chorus]
+- 2–6 lines per section
+- NO explanations, NO titles, ONLY lyrics
 """
 
-    st.info("🤖 Génération des paroles...")
     try:
         result = client.predict(
-            message=prompt,
+            message=user_prompt,
+            system_prompt=system_prompt,
+            max_new_tokens=700,
+            temperature=0.7,
+            top_p=0.9,
+            top_k=50,
+            repetition_penalty=1.1,
             api_name="/chat"
         )
     except Exception as e:
-        st.error(f"❌ Erreur Qwen3-VL : {e}")
-        return generate_default_lyrics(description)
+        st.error(f"❌ Errore LLaMA-2: {e}")
+        return default_lyrics()
 
-    # Extraction texte
     if isinstance(result, list) and result:
         text = result[0]
     else:
         text = str(result)
 
     if "[verse]" not in text.lower():
-        st.warning("⚠️ Sortie invalide, utilisation du template.")
-        return generate_default_lyrics(description)
+        st.warning("⚠️ Output non valido, uso template")
+        return default_lyrics()
 
-    st.success("✅ Paroles générées avec succès")
+    st.success("✅ Parole generate con successo")
     return text.strip()
 
 
-def generate_default_lyrics(description: str) -> str:
-    """Template de secours"""
+def default_lyrics() -> str:
     return """[verse]
-Je marche seul dans la nuit
-Cherchant encore ton regard
-Le silence me poursuit
-Comme un écho trop tard
+Attraverso mari senza nome
+Con una valigia di speranza
+Ogni passo rompe il silenzio
+Ogni sogno chiede una chance
 
 [chorus]
-Je garde l'espoir en moi
-Même quand tout s'effondre
-Je sais qu'un jour quelque part
-La lumière va répondre
+Siamo liberi di camminare
+Senza catene né confini
+Ogni popolo è un orizzonte
+Ogni voce un nuovo inizio
 
 [verse]
-Chaque pas me rapproche
-D'un futur à écrire
-Même quand le ciel est sombre
-Je choisis de sourire
+Lingue diverse, stessi battiti
+Occhi pieni di verità
+Nel viaggio nasce il futuro
+Nell'incontro la libertà
 
 [chorus]
-Je garde l'espoir en moi
-Même quand tout s'effondre
-Je sais qu'un jour quelque part
-La lumière va répondre
+Siamo liberi di camminare
+Senza catene né confini
+Ogni popolo è un orizzonte
+Ogni voce un nuovo inizio
 """
 
 
 def clean_lyrics(text: str) -> str:
-    """Nettoyage basique"""
     return text.replace("```", "").strip()
 
 # ===============================
 # MAIN UI
 # ===============================
-
-st.subheader("📝 Description de la chanson")
+st.subheader("📝 Descrizione della canzone")
 
 description = st.text_area(
-    "Décrivez l'ambiance et le thème",
-    value="Une chanson pop moderne sur l'espoir et la persévérance",
+    "Tema, emozione, messaggio",
+    value="Una canzone sull'immigrazione e sulla libertà di esplorare nuovi popoli",
     height=120
 )
 
 uploaded_audio = st.file_uploader(
-    "🎧 Audio de référence (optionnel)",
+    "🎧 Audio di riferimento (opzionale)",
     type=["mp3", "wav", "ogg"]
 )
 
-if lyrics_mode == "✍️ Manuel":
+if lyrics_mode == "✍️ Manuale":
     manual_lyrics = st.text_area(
-        "✍️ Vos paroles",
-        height=300,
-        value="""[verse]
-Je marche seul dans la nuit
-Ton souvenir me poursuit
-
-[chorus]
-Oh reviens vers moi
-Le monde est froid sans toi"""
+        "✍️ Inserisci le tue parole",
+        height=300
     )
 
 st.markdown("---")
-
-generate_button = st.button("🎛️ GÉNÉRER LA CHANSON")
+generate_button = st.button("🎛️ GENERA CANZONE")
 
 # ===============================
-# WORKFLOW
+# PIPELINE
 # ===============================
 if generate_button:
     if not description.strip():
-        st.error("❌ Description requise")
+        st.error("❌ Inserisci una descrizione")
         st.stop()
 
-    # STEP 1 – LYRICS
-    st.markdown("## 🎼 Étape 1 : Paroles")
+    # STEP 1 — LYRICS
+    st.markdown("## 🎼 Step 1 — Parole")
 
-    if lyrics_mode == "✍️ Manuel":
+    if lyrics_mode == "✍️ Manuale":
         lyrics_text = manual_lyrics
     else:
-        with st.spinner("Génération des paroles..."):
-            lyrics_text = generate_lyrics_with_qwen(description)
+        with st.spinner("Generazione parole..."):
+            lyrics_text = generate_lyrics_with_llama(description)
 
     lyrics_text = clean_lyrics(lyrics_text)
-
     st.code(lyrics_text)
 
-    # STEP 2 – MUSIC
-    st.markdown("## 🎵 Étape 2 : Génération musicale")
+    # STEP 2 — MUSIC
+    st.markdown("## 🎵 Step 2 — Musica")
 
     client_song = Client(space_url_song)
 
     prompt_audio = None
     if uploaded_audio:
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_audio.name).suffix)
+        tmp = tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=Path(uploaded_audio.name).suffix
+        )
         tmp.write(uploaded_audio.getbuffer())
         tmp.close()
         prompt_audio = gr_file(tmp.name)
 
-    with st.spinner("🎶 Génération en cours..."):
-        try:
-            song_result = client_song.predict(
-                lyric=lyrics_text,
-                description=description,
-                prompt_audio=prompt_audio,
-                api_name=api_name_song
-            )
-        except Exception as e:
-            st.error(f"❌ Erreur génération musicale : {e}")
-            st.stop()
+    with st.spinner("🎶 Generazione musica..."):
+        song_result = client_song.predict(
+            lyric=lyrics_text,
+            description=description,
+            prompt_audio=prompt_audio,
+            api_name=api_name_song
+        )
 
-    # STEP 3 – RESULT
-    st.markdown("## 🎧 Résultat")
+    # STEP 3 — RESULT
+    st.markdown("## 🎧 Risultato")
 
     audio_path = None
     if isinstance(song_result, (list, tuple)):
@@ -256,13 +233,13 @@ if generate_button:
         st.audio(audio_path)
         with open(audio_path, "rb") as f:
             st.download_button(
-                "⬇️ Télécharger",
+                "⬇️ Scarica canzone",
                 f.read(),
                 file_name="senorix_song.wav",
                 mime="audio/wav"
             )
     else:
-        st.warning("⚠️ Aucun audio retourné")
+        st.warning("⚠️ Nessun audio restituito")
 
 # ===============================
 # FOOTER
@@ -270,7 +247,7 @@ if generate_button:
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#666;'>"
-    "🎵 <b>Senorix AI</b> — Qwen3-VL & Tencent Song Generation"
+    "🎵 <b>Senorix AI</b> — LLaMA-2 + Tencent Song Generation"
     "</div>",
     unsafe_allow_html=True
 )
