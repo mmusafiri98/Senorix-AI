@@ -69,9 +69,10 @@ genre = st.sidebar.selectbox(
     ["Pop", "Rock", "Hip-Hop", "R&B", "Electronic", "Folk", "Jazz", "Classical", "Country", "Other"],
     index=0
 )
-cfg_coef = st.sidebar.slider("CFG Coefficient", min_value=0.5, max_value=3.0, value=1.5, step=0.1)
-temperature = st.sidebar.slider("Temperature", min_value=0.1, max_value=1.5, value=0.9, step=0.05)
-top_k = st.sidebar.slider("Top K", min_value=1, max_value=100, value=50, step=1)
+
+# RIMOSSO top_k - non supportato
+# Parametri supportati dall'API
+st.sidebar.info("💡 **Note:** Alcuni parametri avanzati potrebbero non essere supportés par tous les modèles.")
 
 # --- Functions ---
 
@@ -458,7 +459,7 @@ if generate_button:
                 if lyrics_mode == "✍️ Manuel":
                     st.info("📝 Utilisation de vos paroles manuelles")
                     lyrics_text = manual_lyrics
-                    time.sleep(0.5)  # Pause visuelle
+                    time.sleep(0.5)
                 else:
                     st.info("🤖 Génération automatique des paroles par IA...")
                     with st.spinner("Génération en cours..."):
@@ -502,42 +503,53 @@ if generate_button:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Simulation de progression
-                for i in range(100):
-                    time.sleep(0.02)
-                    progress_bar.progress(i + 1)
-                    if i < 30:
-                        status_text.text("🎵 Analyse des paroles...")
-                    elif i < 60:
-                        status_text.text("🎹 Génération de la mélodie...")
-                    elif i < 90:
-                        status_text.text("🎤 Synthèse vocale...")
-                    else:
-                        status_text.text("🎚️ Mixage final...")
-                
+                # CORREZIONE: Chiamata API senza top_k
                 try:
-                    song_result = client_song.predict(
-                        lyric=lyrics_text,
-                        description=description,
-                        prompt_audio=prompt_audio_arg,
-                        genre=genre,
-                        cfg_coef=float(cfg_coef),
-                        temperature=float(temperature),
-                        top_k=int(top_k),
-                        api_name=api_name_song
-                    )
+                    # Verifica quali parametri accetta l'API
+                    st.info("🔍 Vérification des paramètres de l'API...")
+                    
+                    # Tentativo 1: Solo parametri base
+                    try:
+                        song_result = client_song.predict(
+                            lyric=lyrics_text,
+                            description=description,
+                            prompt_audio=prompt_audio_arg,
+                            api_name=api_name_song
+                        )
+                    except Exception as e1:
+                        # Se fallisce, prova con solo lyrics e description
+                        st.warning(f"⚠️ Tentative avec paramètres minimaux...")
+                        try:
+                            song_result = client_song.predict(
+                                lyric=lyrics_text,
+                                description=description,
+                                api_name=api_name_song
+                            )
+                        except Exception as e2:
+                            # Ultima chance: solo lyrics
+                            st.warning("⚠️ Tentative avec paroles uniquement...")
+                            song_result = client_song.predict(
+                                lyric=lyrics_text,
+                                api_name=api_name_song
+                            )
                     
                     progress_bar.progress(100)
                     status_text.text("✅ Génération terminée !")
                     
                 except Exception as e:
                     st.error(f"❌ Erreur lors de la génération : {str(e)}")
+                    st.info("""
+                    💡 **Suggestions :**
+                    - L'API a peut-être changé ses paramètres
+                    - Essayez de vérifier la documentation de l'API
+                    - Contactez le support du modèle
+                    """)
                     st.stop()
                 
                 # === ÉTAPE 3: Affichage des Résultats ===
                 st.markdown("### 🎧 Votre Chanson")
                 
-                # Debug info (collapsed by default)
+                # Debug info
                 with st.expander("🔍 Informations de Debug"):
                     st.write("**Type de résultat:**", type(song_result))
                     st.write("**Contenu:**", song_result)
@@ -582,7 +594,7 @@ if generate_button:
                             audio_found = True
                             
                             # Informations sur le fichier
-                            file_size = len(audio_bytes) / (1024 * 1024)  # MB
+                            file_size = len(audio_bytes) / (1024 * 1024)
                             st.info(f"📊 Taille du fichier : {file_size:.2f} MB")
                             
                         except Exception as e:
@@ -595,7 +607,7 @@ if generate_button:
                     - Vérifiez que le modèle est disponible
                     - Essayez avec des paroles plus courtes
                     - Utilisez le mode manuel avec des paroles simples
-                    - Contactez le support si le problème persiste
+                    - Consultez les informations de debug ci-dessus
                     """)
                 
             except Exception as e:
