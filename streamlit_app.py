@@ -3,26 +3,27 @@ from gradio_client import Client, file as gr_file
 import tempfile
 from pathlib import Path
 import time
+import re
 
-# ===============================
+# ======================================================
 # PAGE CONFIG
-# ===============================
+# ======================================================
 st.set_page_config(
     page_title="Senorix AI — Song Generation",
     layout="centered"
 )
 
-# ===============================
-# CSS
-# ===============================
+# ======================================================
+# STYLE
+# ======================================================
 st.markdown("""
 <style>
 .main-header {
     text-align: center;
-    padding: 20px;
+    padding: 22px;
     background: linear-gradient(135deg, #667eea, #764ba2);
     color: white;
-    border-radius: 12px;
+    border-radius: 14px;
     margin-bottom: 30px;
 }
 .stButton>button {
@@ -30,7 +31,7 @@ st.markdown("""
     background-color: #667eea;
     color: white;
     font-weight: bold;
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 14px;
 }
 </style>
@@ -39,13 +40,13 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
 <h1>🎵 Senorix AI — Song Generation</h1>
-<p>Lyrics con LLaMA-2 & Musica con Tencent</p>
+<p>Lyrics AI + Music Generation</p>
 </div>
 """, unsafe_allow_html=True)
 
-# ===============================
+# ======================================================
 # SIDEBAR
-# ===============================
+# ======================================================
 st.sidebar.header("⚙️ Configurazione")
 
 lyrics_mode = st.sidebar.radio(
@@ -57,72 +58,52 @@ lyrics_mode = st.sidebar.radio(
 st.sidebar.markdown("---")
 
 space_url_song = st.sidebar.text_input(
-    "🎹 Tencent Song Space URL",
+    "🎹 Tencent Song Space",
     value="https://tencent-songgeneration.hf.space/"
 )
 
 api_name_song = st.sidebar.text_input(
-    "Endpoint musica",
+    "🎵 Endpoint musica",
     value="/generate_song"
 )
 
-# ===============================
-# FUNCTIONS
-# ===============================
+# ======================================================
+# LYRICS UTILS
+# ======================================================
 
-def generate_lyrics_with_llama(description: str) -> str:
-    """Genera lyrics con LLaMA-2-13B-Chat"""
+def normalize_lyrics(text: str) -> str:
+    """
+    Rende SEMPRE valido l'output dell'AI se possibile
+    """
+    if not text:
+        return ""
 
-    st.info("🔄 Connessione a LLaMA-2-13B-Chat...")
-    client = Client("huggingface-projects/llama-2-13b-chat")
+    # rimuove markdown
+    text = text.replace("```", "").strip()
 
-    system_prompt = (
-        "You are a professional songwriter. "
-        "You write emotional, singable song lyrics."
-    )
+    # rimuove qualsiasi testo prima del primo tag
+    match = re.search(r'\[(verse|chorus|bridge)\]', text, re.I)
+    if match:
+        text = text[match.start():]
 
-    user_prompt = f"""
-Write song lyrics based on this theme:
+    # normalizza i tag
+    text = re.sub(r'\[verse\]', '[verse]', text, flags=re.I)
+    text = re.sub(r'\[chorus\]', '[chorus]', text, flags=re.I)
+    text = re.sub(r'\[bridge\]', '[bridge]', text, flags=re.I)
 
-"{description}"
-
-STRICT RULES:
-- Use ONLY these tags: [verse], [chorus], [bridge]
-- Start with [verse] or [chorus]
-- At least 2 [verse] and 1 [chorus]
-- 2–6 lines per section
-- NO explanations, NO titles, ONLY lyrics
-"""
-
-    try:
-        result = client.predict(
-            message=user_prompt,
-            system_prompt=system_prompt,
-            max_new_tokens=700,
-            temperature=0.7,
-            top_p=0.9,
-            top_k=50,
-            repetition_penalty=1.1,
-            api_name="/chat"
-        )
-    except Exception as e:
-        st.error(f"❌ Errore LLaMA-2: {e}")
-        return default_lyrics()
-
-    if isinstance(result, list) and result:
-        text = result[0]
-    else:
-        text = str(result)
-
-    if "[verse]" not in text.lower():
-        st.warning("⚠️ Output non valido, uso template")
-        return default_lyrics()
-
-    st.success("✅ Parole generate con successo")
     return text.strip()
 
 
+def is_valid_lyrics(text: str) -> bool:
+    """
+    Valido se contiene almeno verse + chorus
+    """
+    t = text.lower()
+    return "[verse]" in t and "[chorus]" in t
+
+
 def default_lyrics() -> str:
+    """Fallback sicuro"""
     return """[verse]
 Attraverso mari senza nome
 Con una valigia di speranza
@@ -148,14 +129,75 @@ Ogni popolo è un orizzonte
 Ogni voce un nuovo inizio
 """
 
+# ======================================================
+# AI GENERATION
+# ======================================================
 
-def clean_lyrics(text: str) -> str:
-    return text.replace("```", "").strip()
+def generate_lyrics_with_llama(description: str) -> str:
+    """
+    Generazione ROBUSTA con LLaMA-2
+    """
+    st.info("🔄 Connessione a LLaMA-2-13B-Chat…")
 
-# ===============================
+    client = Client("huggingface-projects/llama-2-13b-chat")
+
+    system_prompt = (
+        "You are a professional songwriter.\n"
+        "You must ONLY output song lyrics.\n"
+        "You must NEVER explain.\n"
+        "You must start immediately with [verse] or [chorus]."
+    )
+
+    user_prompt = f"""
+Write a song about:
+
+\"{description}\"
+
+STRICT RULES:
+- Output ONLY lyrics
+- Use ONLY: [verse], [chorus], [bridge]
+- Start IMMEDIATELY with a tag
+- No titles, no comments
+- 2–6 lines per section
+"""
+
+    try:
+        raw = client.predict(
+            message=user_prompt,
+            system_prompt=system_prompt,
+            max_new_tokens=700,
+            temperature=0.65,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            api_name="/chat"
+        )
+    except Exception as e:
+        st.error(f"❌ Errore AI: {e}")
+        return default_lyrics()
+
+    # estrazione testo
+    if isinstance(raw, list):
+        raw_text = raw[0]
+    else:
+        raw_text = str(raw)
+
+    # NORMALIZZAZIONE
+    cleaned = normalize_lyrics(raw_text)
+
+    # VALIDAZIONE
+    if not is_valid_lyrics(cleaned):
+        st.warning("⚠️ Output AI non strutturato, uso fallback")
+        return default_lyrics()
+
+    st.success("✅ Parole generate correttamente")
+    return cleaned
+
+
+# ======================================================
 # MAIN UI
-# ===============================
-st.subheader("📝 Descrizione della canzone")
+# ======================================================
+
+st.subheader("📝 Descrizione canzone")
 
 description = st.text_area(
     "Tema, emozione, messaggio",
@@ -170,16 +212,17 @@ uploaded_audio = st.file_uploader(
 
 if lyrics_mode == "✍️ Manuale":
     manual_lyrics = st.text_area(
-        "✍️ Inserisci le tue parole",
+        "✍️ Inserisci le parole",
         height=300
     )
 
 st.markdown("---")
 generate_button = st.button("🎛️ GENERA CANZONE")
 
-# ===============================
+# ======================================================
 # PIPELINE
-# ===============================
+# ======================================================
+
 if generate_button:
     if not description.strip():
         st.error("❌ Inserisci una descrizione")
@@ -191,10 +234,9 @@ if generate_button:
     if lyrics_mode == "✍️ Manuale":
         lyrics_text = manual_lyrics
     else:
-        with st.spinner("Generazione parole..."):
+        with st.spinner("Generazione parole…"):
             lyrics_text = generate_lyrics_with_llama(description)
 
-    lyrics_text = clean_lyrics(lyrics_text)
     st.code(lyrics_text)
 
     # STEP 2 — MUSIC
@@ -212,7 +254,7 @@ if generate_button:
         tmp.close()
         prompt_audio = gr_file(tmp.name)
 
-    with st.spinner("🎶 Generazione musica..."):
+    with st.spinner("🎶 Generazione musica…"):
         song_result = client_song.predict(
             lyric=lyrics_text,
             description=description,
@@ -220,7 +262,7 @@ if generate_button:
             api_name=api_name_song
         )
 
-    # STEP 3 — RESULT
+    # STEP 3 — OUTPUT
     st.markdown("## 🎧 Risultato")
 
     audio_path = None
@@ -241,9 +283,9 @@ if generate_button:
     else:
         st.warning("⚠️ Nessun audio restituito")
 
-# ===============================
+# ======================================================
 # FOOTER
-# ===============================
+# ======================================================
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#666;'>"
