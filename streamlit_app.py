@@ -37,7 +37,7 @@ st.markdown('<div class="main-header"><h1>🎵 Senorix AI — Song Generation</h
 st.markdown(
     """
     ### Comment ça marche ?
-    1. **Génération des paroles** : Un modèle LLM crée les paroles à partir de votre description (ou vous pouvez les écrire manuellement)
+    1. **Génération des paroles** : Qwen3-VL crée les paroles à partir de votre description
     2. **Génération de la musique** : Le modèle Tencent transforme ces paroles en chanson chantée
     """
 )
@@ -48,9 +48,9 @@ st.sidebar.header("⚙️ Configuration")
 st.sidebar.markdown("### 🎤 Mode de Génération des Paroles")
 lyrics_mode = st.sidebar.radio(
     "Comment générer les paroles ?",
-    ["🤖 Automatique (IA)", "✍️ Manuel"],
+    ["🤖 Automatique (Qwen3-VL)", "✍️ Manuel"],
     index=0,
-    help="Automatique: l'IA génère les paroles. Manuel: vous les écrivez vous-même."
+    help="Automatique: Qwen3-VL génère les paroles. Manuel: vous les écrivez vous-même."
 )
 
 st.sidebar.markdown("---")
@@ -70,24 +70,17 @@ genre = st.sidebar.selectbox(
     index=0
 )
 
-# RIMOSSO top_k - non supportato
-# Parametri supportati dall'API
-st.sidebar.info("💡 **Note:** Alcuni parametri avanzati potrebbero non essere supportés par tous les modèles.")
-
 # --- Functions ---
 
-def generate_lyrics_with_llm(description):
-    """Génère des paroles avec fallback sur plusieurs modèles LLM"""
+def generate_lyrics_with_qwen(description):
+    """Génère des paroles avec Qwen3-VL-Demo"""
     
-    llm_models = [
-        "Qwen/Qwen2.5-72B-Instruct",
-        "mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "meta-llama/Meta-Llama-3-70B-Instruct",
-        "microsoft/Phi-3-medium-128k-instruct",
-        "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO"
-    ]
-    
-    prompt = f"""Tu es un parolier professionnel expert.
+    try:
+        st.info("🔄 Connexion à Qwen3-VL-Demo...")
+        client = Client("Qwen/Qwen3-VL-Demo")
+        
+        # Prompt optimisé pour Qwen3-VL
+        prompt = f"""Tu es un parolier professionnel expert.
 
 TÂCHE : Génère des paroles de chanson basées sur cette description :
 "{description}"
@@ -98,7 +91,7 @@ RÈGLES STRICTES ET OBLIGATOIRES :
 3. N'utilise JAMAIS : [intro], [inst], [outro] ou leurs variantes
 4. Chaque section doit contenir 2 à 6 lignes de paroles
 5. Structure minimale : au moins 2 [verse] et 1 [chorus]
-6. Ne génère RIEN d'autre que les paroles avec balises (pas de commentaires, pas d'explications)
+6. Ne génère RIEN d'autre que les paroles avec balises
 
 EXEMPLE DE FORMAT CORRECT :
 
@@ -140,37 +133,62 @@ Mais tu es loin de nous
 
 MAINTENANT, génère les paroles (UNIQUEMENT les paroles avec balises, rien d'autre) :"""
 
-    for i, model in enumerate(llm_models, 1):
+        st.info("🤖 Génération des paroles avec Qwen3-VL...")
+        
+        # Première tentative : avec apply_state_change
         try:
-            st.info(f"🔄 Tentative {i}/{len(llm_models)} : Utilisation de {model.split('/')[-1]}")
+            # Initialiser l'état si nécessaire
+            client.predict(api_name="/apply_state_change")
             
-            client_llm = Client(model)
-            
-            lyrics_result = client_llm.predict(
-                message=prompt,
-                api_name="/chat"
+            # Générer les paroles
+            lyrics_result = client.predict(
+                text_input=prompt,
+                api_name="/submit_message"
             )
             
-            lyrics_text = lyrics_result if isinstance(lyrics_result, str) else str(lyrics_result)
+        except Exception as e1:
+            st.warning(f"⚠️ Méthode 1 échouée, tentative alternative...")
             
-            # Vérification basique de la qualité
-            if lyrics_text and len(lyrics_text.strip()) > 50 and "[verse]" in lyrics_text.lower():
-                st.success(f"✅ Paroles générées avec succès par {model.split('/')[-1]}")
-                return lyrics_text
+            # Deuxième tentative : méthode alternative
+            try:
+                lyrics_result = client.predict(
+                    message=prompt,
+                    api_name="/chat"
+                )
+            except Exception as e2:
+                st.warning(f"⚠️ Méthode 2 échouée, tentative basique...")
                 
-        except Exception as e:
-            st.warning(f"⚠️ {model.split('/')[-1]} indisponible : {str(e)[:100]}")
-            continue
-    
-    # Si tous les modèles échouent
-    st.error("❌ Tous les modèles LLM sont indisponibles. Utilisation d'un template par défaut.")
-    return generate_default_lyrics(description)
+                # Troisième tentative : appel direct
+                lyrics_result = client.predict(
+                    prompt,
+                    api_name="/predict"
+                )
+        
+        # Extraction du texte
+        if isinstance(lyrics_result, (list, tuple)):
+            lyrics_text = lyrics_result[0] if len(lyrics_result) > 0 else ""
+        elif isinstance(lyrics_result, dict):
+            lyrics_text = lyrics_result.get('text') or lyrics_result.get('output') or str(lyrics_result)
+        else:
+            lyrics_text = str(lyrics_result)
+        
+        # Vérification de la qualité
+        if lyrics_text and len(lyrics_text.strip()) > 50 and "[verse]" in lyrics_text.lower():
+            st.success("✅ Paroles générées avec succès par Qwen3-VL")
+            return lyrics_text
+        else:
+            st.warning("⚠️ Résultat incomplet, utilisation d'un template...")
+            return generate_default_lyrics(description)
+            
+    except Exception as e:
+        st.error(f"❌ Erreur avec Qwen3-VL : {str(e)[:150]}")
+        st.info("💡 Utilisation d'un template par défaut...")
+        return generate_default_lyrics(description)
 
 
 def generate_default_lyrics(description):
     """Génère des paroles par défaut basées sur la description"""
     
-    # Extraction de mots-clés simples
     keywords = description.lower()
     
     if any(word in keywords for word in ["amour", "love", "cœur", "heart"]):
@@ -332,12 +350,10 @@ Que demain sera mieux"""
 
 
 def clean_lyrics(lyrics_text):
-    """Nettoie et valide les paroles pour respecter les contraintes strictes"""
+    """Nettoie et valide les paroles"""
     
-    # Nettoyer les markdown code blocks si présents
     lyrics_text = lyrics_text.replace("```", "").strip()
     
-    # Supprimer les lignes qui ne sont pas des paroles ou des balises
     lines = lyrics_text.splitlines()
     cleaned_lines = []
     
@@ -354,29 +370,24 @@ def clean_lyrics(lyrics_text):
     for line in lines:
         line_stripped = line.strip().lower()
         
-        # Ignorer les lignes vides au début
         if not cleaned_lines and not line_stripped:
             continue
         
-        # Détecter et supprimer les sections interdites
         if any(line_stripped.startswith(tag) for tag in forbidden_tags):
             skip_section = True
             continue
         
-        # Revenir au mode normal si on trouve un tag valide
         if line_stripped.startswith("[") and line_stripped.endswith("]"):
             if any(line_stripped.startswith(tag) for tag in valid_tags):
                 skip_section = False
                 cleaned_lines.append(line)
                 continue
         
-        # Ajouter la ligne si on n'est pas en mode skip
         if not skip_section:
             cleaned_lines.append(line)
     
     lyrics_text = "\n".join(cleaned_lines).strip()
     
-    # S'assurer que ça commence par un tag valide
     if not any(lyrics_text.lower().startswith(tag) for tag in valid_tags):
         lyrics_text = "[verse]\n" + lyrics_text
     
@@ -405,7 +416,7 @@ with col2:
         help="Un extrait audio pour guider le style musical"
     )
 
-# Zone de paroles manuelles (conditionnelle)
+# Zone de paroles manuelles
 if lyrics_mode == "✍️ Manuel":
     st.subheader("✍️ Vos Paroles")
     st.info("💡 Utilisez uniquement les balises : [verse], [chorus], [bridge]")
@@ -448,12 +459,11 @@ if generate_button:
     if not description.strip():
         st.error("❌ Veuillez fournir une description de la chanson.")
     else:
-        # Container pour les résultats
         results_container = st.container()
         
         with results_container:
             try:
-                # === ÉTAPE 1: Génération/Récupération des Paroles ===
+                # === ÉTAPE 1: Génération des Paroles ===
                 st.markdown("### 🎼 Étape 1 : Génération des Paroles")
                 
                 if lyrics_mode == "✍️ Manuel":
@@ -461,14 +471,13 @@ if generate_button:
                     lyrics_text = manual_lyrics
                     time.sleep(0.5)
                 else:
-                    st.info("🤖 Génération automatique des paroles par IA...")
+                    st.info("🤖 Génération automatique avec Qwen3-VL...")
                     with st.spinner("Génération en cours..."):
-                        lyrics_text = generate_lyrics_with_llm(description)
+                        lyrics_text = generate_lyrics_with_qwen(description)
                 
-                # Nettoyage des paroles
+                # Nettoyage
                 lyrics_text = clean_lyrics(lyrics_text)
                 
-                # Affichage des paroles
                 st.success("✅ Paroles prêtes !")
                 
                 with st.expander("📜 Voir les Paroles Complètes", expanded=True):
@@ -483,10 +492,10 @@ if generate_button:
                     client_song = Client(space_url_song)
                     st.success("✅ Connecté au modèle Tencent Song Generation")
                 except Exception as e:
-                    st.error(f"❌ Impossible de se connecter au modèle de chanson : {str(e)}")
+                    st.error(f"❌ Impossible de se connecter : {str(e)}")
                     st.stop()
                 
-                # Préparation de l'audio de référence
+                # Audio de référence
                 prompt_audio_arg = None
                 if uploaded_audio is not None:
                     st.info("🎧 Traitement de l'audio de référence...")
@@ -497,18 +506,26 @@ if generate_button:
                     prompt_audio_arg = gr_file(tmp.name)
                     st.success("✅ Audio de référence chargé")
                 
-                # Génération de la chanson
-                st.info("🎼 Génération de la chanson en cours... (cela peut prendre 1-3 minutes)")
+                # Génération
+                st.info("🎼 Génération de la chanson en cours... (1-3 minutes)")
                 
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # CORREZIONE: Chiamata API senza top_k
+                for i in range(100):
+                    time.sleep(0.02)
+                    progress_bar.progress(i + 1)
+                    if i < 30:
+                        status_text.text("🎵 Analyse des paroles...")
+                    elif i < 60:
+                        status_text.text("🎹 Génération de la mélodie...")
+                    elif i < 90:
+                        status_text.text("🎤 Synthèse vocale...")
+                    else:
+                        status_text.text("🎚️ Mixage final...")
+                
                 try:
-                    # Verifica quali parametri accetta l'API
-                    st.info("🔍 Vérification des paramètres de l'API...")
-                    
-                    # Tentativo 1: Solo parametri base
+                    # Appel API avec fallback
                     try:
                         song_result = client_song.predict(
                             lyric=lyrics_text,
@@ -516,18 +533,14 @@ if generate_button:
                             prompt_audio=prompt_audio_arg,
                             api_name=api_name_song
                         )
-                    except Exception as e1:
-                        # Se fallisce, prova con solo lyrics e description
-                        st.warning(f"⚠️ Tentative avec paramètres minimaux...")
+                    except:
                         try:
                             song_result = client_song.predict(
                                 lyric=lyrics_text,
                                 description=description,
                                 api_name=api_name_song
                             )
-                        except Exception as e2:
-                            # Ultima chance: solo lyrics
-                            st.warning("⚠️ Tentative avec paroles uniquement...")
+                        except:
                             song_result = client_song.predict(
                                 lyric=lyrics_text,
                                 api_name=api_name_song
@@ -537,102 +550,70 @@ if generate_button:
                     status_text.text("✅ Génération terminée !")
                     
                 except Exception as e:
-                    st.error(f"❌ Erreur lors de la génération : {str(e)}")
-                    st.info("""
-                    💡 **Suggestions :**
-                    - L'API a peut-être changé ses paramètres
-                    - Essayez de vérifier la documentation de l'API
-                    - Contactez le support du modèle
-                    """)
+                    st.error(f"❌ Erreur : {str(e)}")
                     st.stop()
                 
-                # === ÉTAPE 3: Affichage des Résultats ===
+                # === ÉTAPE 3: Résultats ===
                 st.markdown("### 🎧 Votre Chanson")
                 
-                # Debug info
                 with st.expander("🔍 Informations de Debug"):
-                    st.write("**Type de résultat:**", type(song_result))
+                    st.write("**Type:**", type(song_result))
                     st.write("**Contenu:**", song_result)
                 
-                # Gestion de l'audio
+                # Gestion audio
                 audio_found = False
                 audio_path = None
                 
-                # Cas 1: Liste ou tuple
                 if isinstance(song_result, (list, tuple)) and len(song_result) > 0:
                     audio_path = song_result[0]
-                
-                # Cas 2: String directe
                 elif isinstance(song_result, str):
                     audio_path = song_result
-                
-                # Cas 3: Dictionnaire
                 elif isinstance(song_result, dict):
                     audio_path = song_result.get('audio') or song_result.get('file') or song_result.get('path')
                 
-                # Vérification et affichage
                 if audio_path and isinstance(audio_path, str):
                     if audio_path.endswith((".wav", ".mp3", ".ogg", ".flac")):
                         try:
                             st.success("🎉 Chanson générée avec succès !")
-                            
-                            # Player audio
                             st.audio(audio_path)
                             
-                            # Bouton de téléchargement
                             with open(audio_path, "rb") as f:
                                 audio_bytes = f.read()
-                                
                                 st.download_button(
                                     label="⬇️ Télécharger la Chanson",
                                     data=audio_bytes,
-                                    file_name=f"senorix_song_{int(time.time())}.wav",
+                                    file_name=f"senorix_qwen_song_{int(time.time())}.wav",
                                     mime="audio/wav",
                                     use_container_width=True
                                 )
                             
                             audio_found = True
-                            
-                            # Informations sur le fichier
                             file_size = len(audio_bytes) / (1024 * 1024)
-                            st.info(f"📊 Taille du fichier : {file_size:.2f} MB")
+                            st.info(f"📊 Taille : {file_size:.2f} MB")
                             
                         except Exception as e:
-                            st.error(f"❌ Erreur lors de la lecture de l'audio : {str(e)}")
+                            st.error(f"❌ Erreur lecture audio : {str(e)}")
                 
                 if not audio_found:
-                    st.warning("⚠️ Aucun fichier audio n'a pu être extrait de la réponse.")
+                    st.warning("⚠️ Aucun fichier audio extrait.")
                     st.info("""
-                    💡 **Solutions possibles :**
-                    - Vérifiez que le modèle est disponible
+                    💡 **Solutions :**
+                    - Vérifiez la disponibilité du modèle
                     - Essayez avec des paroles plus courtes
-                    - Utilisez le mode manuel avec des paroles simples
-                    - Consultez les informations de debug ci-dessus
+                    - Utilisez le mode manuel
                     """)
                 
             except Exception as e:
-                st.error("❌ Une erreur s'est produite pendant le processus")
+                st.error("❌ Erreur pendant le processus")
                 st.exception(e)
-                st.info("""
-                💡 **Que faire ?**
-                - Essayez avec une description plus courte
-                - Vérifiez votre connexion internet
-                - Passez en mode manuel si le problème persiste
-                - Réessayez dans quelques minutes
-                """)
 
 # --- Footer ---
 st.markdown("---")
 st.markdown(
     """
     <div style='text-align: center; color: #666; padding: 20px;'>
-        <p style='font-size: 14px;'>🎵 <strong>Senorix AI</strong> — Génération de Chansons par Intelligence Artificielle</p>
-        <p style='font-size: 12px;'>Propulsé par Hugging Face Spaces & Gradio</p>
-        <p style='font-size: 11px; margin-top: 10px;'>
-            <a href='#' style='color: #667eea; text-decoration: none;'>Documentation</a> • 
-            <a href='#' style='color: #667eea; text-decoration: none;'>Support</a> • 
-            <a href='#' style='color: #667eea; text-decoration: none;'>GitHub</a>
-        </p>
+        <p style='font-size: 14px;'>🎵 <strong>Senorix AI</strong> — Génération avec Qwen3-VL</p>
+        <p style='font-size: 12px;'>Propulsé par Qwen3-VL-Demo & Tencent Song Generation</p>
     </div>
     """,
     unsafe_allow_html=True
