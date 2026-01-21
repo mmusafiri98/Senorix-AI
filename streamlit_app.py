@@ -1,19 +1,20 @@
 import streamlit as st
 import cohere
 import re
+import time
 
 # ======================================================
 # CONFIG
 # ======================================================
 st.set_page_config(
-    page_title="Senorix AI — Musical Assistant (Cohere)",
+    page_title="Senorix AI — Musical Assistant",
     layout="centered"
 )
 
 st.markdown("""
-<h1 style='text-align:center;'>🎵 Senorix AI — Musical Assistant</h1>
+<h1 style='text-align:center;'>🎵 Senorix AI</h1>
 <p style='text-align:center;color:#777;'>
-Chat musicale • Testo canzone • Cohere Command A Vision
+Musical Assistant • Lyrics for Music Generation
 </p>
 <hr>
 """, unsafe_allow_html=True)
@@ -22,7 +23,6 @@ Chat musicale • Testo canzone • Cohere Command A Vision
 # COHERE CLIENT
 # ======================================================
 co = cohere.Client(st.secrets["COHERE_API_KEY"])
-
 MODEL_NAME = "command-a-vision-07-2025"
 
 # ======================================================
@@ -35,7 +35,7 @@ if "lyrics" not in st.session_state:
     st.session_state.lyrics = ""
 
 # ======================================================
-# UTILS — RIMOZIONE ACCORDI (CODICE, NON AI)
+# UTILS — ACCORDI & STRUTTURA
 # ======================================================
 def remove_chords(text: str) -> str:
     patterns = [
@@ -71,66 +71,86 @@ def fallback_structure(text: str) -> str:
 """
 
 # ======================================================
-# COHERE CHAT — SOLO MUSICA
+# TYPEWRITER EFFECT
 # ======================================================
-def music_assistant(user_message: str) -> str:
+def typewriter(container, text, delay=0.015):
+    rendered = ""
+    for char in text:
+        rendered += char
+        container.markdown(rendered)
+        time.sleep(delay)
+
+# ======================================================
+# SENORIX AI — CHAT MUSICALE
+# ======================================================
+def senorix_ai(user_message: str) -> str:
     system_prompt = """
-You are a professional music assistant and songwriter.
+You are Senorix AI, a professional musical assistant and songwriter.
 
 RULES:
-- Talk ONLY about music, songs, mood, genre, structure
-- You may discuss themes and musical ideas
+- Talk ONLY about music, songwriting, mood, genre, structure
+- You may discuss musical themes and creative direction
 - You may write or rewrite song lyrics
-- If you write lyrics, you MUST use ONLY:
+- If you write lyrics, output ONLY valid lyrics
+- Use ONLY the following tags:
   [verse], [chorus], [bridge]
-- NEVER mention rules or explanations
+- No titles, no explanations, no comments
 """
 
-    try:
-        response = co.chat(
-            model=MODEL_NAME,
-            message=user_message,
-            preamble=system_prompt,
-            temperature=0.7,
-            max_tokens=600
-        )
-        return response.text
-    except Exception as e:
-        return f"⚠️ Errore Cohere: {e}"
+    response = co.chat(
+        model=MODEL_NAME,
+        message=user_message,
+        preamble=system_prompt,
+        temperature=0.7,
+        max_tokens=700
+    )
+    return response.text
 
 # ======================================================
-# UI — CHAT MUSICALE
+# UI — CHAT
 # ======================================================
-st.subheader("💬 Chat musicale con l’AI")
+st.subheader("💬 Chat musicale")
 
 for role, msg in st.session_state.chat:
     st.markdown(f"**{role}:** {msg}")
 
 user_input = st.text_input(
-    "Parla del tema, mood o chiedi di scrivere/modificare la canzone"
+    "Parle du thème, du mood ou demande d’écrire/modifier la chanson"
 )
 
-if st.button("Invia"):
+if st.button("Envoyer"):
     if user_input.strip():
-        st.session_state.chat.append(("Utente", user_input))
+        st.session_state.chat.append(("Utilisateur", user_input))
 
-        reply = music_assistant(user_input)
-        st.session_state.chat.append(("AI", reply))
+        thinking = st.empty()
+        thinking.markdown("**Senorix AI is thinking...**")
 
-        # Se l'AI ha scritto un testo canzone → processalo
+        try:
+            reply = senorix_ai(user_input)
+        except Exception as e:
+            reply = f"⚠️ Erreur Cohere: {e}"
+
+        thinking.empty()
+
+        response_container = st.empty()
+        typewriter(response_container, f"**Senorix AI:** {reply}")
+
+        st.session_state.chat.append(("Senorix AI", reply))
+
+        # Se contiene lyrics → pulizia + struttura
         if "[verse]" in reply.lower():
             cleaned = remove_chords(reply)
             structured = normalize_lyrics(cleaned)
             st.session_state.lyrics = structured
 
 # ======================================================
-# UI — TESTO CANZONE
+# UI — LYRICS OUTPUT
 # ======================================================
 st.markdown("---")
-st.subheader("🎤 Testo Canzone")
+st.subheader("🎤 Lyrics (format musique)")
 
 lyrics_input = st.text_area(
-    "Testo (puoi modificarlo manualmente)",
+    "Lyrics prêts pour la génération musicale",
     value=st.session_state.lyrics,
     height=320
 )
@@ -138,12 +158,12 @@ lyrics_input = st.text_area(
 col1, col2 = st.columns(2)
 
 with col1:
-    if st.button("🧹 Rimuovi accordi"):
+    if st.button("🧹 Nettoyer accords"):
         cleaned = remove_chords(lyrics_input)
         st.session_state.lyrics = normalize_lyrics(cleaned)
 
 with col2:
-    if st.button("💾 Salva testo"):
+    if st.button("💾 Sauvegarder"):
         st.session_state.lyrics = lyrics_input
 
 st.code(st.session_state.lyrics)
@@ -158,3 +178,4 @@ st.markdown("""
 Cohere Command A Vision — Musical Assistant
 </div>
 """, unsafe_allow_html=True)
+
