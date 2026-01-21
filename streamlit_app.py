@@ -1,101 +1,50 @@
 import streamlit as st
-from gradio_client import Client, file as gr_file
-import tempfile
-from pathlib import Path
-import time
+from gradio_client import Client
 import re
 
 # ======================================================
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(
-    page_title="Senorix AI — Song Generation",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Senorix AI — Song Preparation",
+    layout="wide"
 )
 
 # ======================================================
-# STYLE
+# HEADER
 # ======================================================
 st.markdown("""
-<style>
-.main-header {
-    text-align: center;
-    padding: 22px;
-    background: linear-gradient(135deg, #667eea, #764ba2);
-    color: white;
-    border-radius: 14px;
-    margin-bottom: 30px;
-}
-.stButton>button {
-    width: 100%;
-    background-color: #667eea;
-    color: white;
-    font-weight: bold;
-    border-radius: 12px;
-    padding: 14px;
-}
-.info-box {
-    background: #f0f2f6;
-    padding: 15px;
-    border-radius: 10px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div class="main-header">
-<h1>🎵 Senorix AI — Song Generation</h1>
-<p>Lyrics AI + Musica Personalizzata</p>
-</div>
+<h1 style='text-align:center;'>🎵 Senorix AI — Preparazione Testo Canzone</h1>
+<p style='text-align:center;color:gray;'>
+Pulizia accordi • Strutturazione AI • Pronto per la musica
+</p>
+<hr>
 """, unsafe_allow_html=True)
 
 # ======================================================
 # SIDEBAR
 # ======================================================
-st.sidebar.header("⚙️ Configurazione Testo")
+st.sidebar.header("⚙️ Modalità Testo")
 
 lyrics_mode = st.sidebar.radio(
-    "Modalità testo",
+    "Scegli modalità",
     [
-        "🤖 Automatica (LLaMA-2)",
+        "🤖 Genera testo (LLaMA)",
         "✍️ Manuale (già formattato)",
-        "🧹 Formatta testo esistente (rimuove accordi)"
+        "🧹 Formatta testo esistente (AI rimuove accordi)"
     ]
 )
 
 # ======================================================
-# UTILS TESTO
+# UTILS
 # ======================================================
-
-CHORD_REGEX = r"""
-(\b[A-G][#b]?(maj|min|dim|aug|sus|m)?\d?\b) |
-(\[[A-G][^\]]+\]) |
-(\([A-G][^)]+\)) |
-(\|[^|]+\|)
-"""
-
-def remove_chords(text: str) -> str:
-    text = re.sub(CHORD_REGEX, "", text, flags=re.VERBOSE)
-    return re.sub(r'\s{2,}', ' ', text).strip()
-
-def auto_structure_lyrics(text: str) -> str:
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    verse = lines[:len(lines)//2]
-    chorus = lines[len(lines)//2:]
-
-    return f"""[verse]
-{chr(10).join(verse)}
-
-[chorus]
-{chr(10).join(chorus)}
-"""
 
 def normalize_lyrics(text: str) -> str:
     text = text.replace("```", "").strip()
     match = re.search(r'\[(verse|chorus|bridge)\]', text, re.I)
     if match:
         text = text[match.start():]
+
     text = re.sub(r'\[verse\]', '[verse]', text, flags=re.I)
     text = re.sub(r'\[chorus\]', '[chorus]', text, flags=re.I)
     text = re.sub(r'\[bridge\]', '[bridge]', text, flags=re.I)
@@ -106,23 +55,62 @@ def is_valid_lyrics(text: str) -> bool:
     return "[verse]" in t and "[chorus]" in t
 
 # ======================================================
+# AI — CLEAN & STRUCTURE
+# ======================================================
+
+def ai_clean_and_structure(raw_text: str) -> str:
+    client = Client("huggingface-projects/llama-2-13b-chat")
+
+    system_prompt = """
+You are a professional music editor.
+
+YOUR TASK:
+- REMOVE ALL chords (C, Am7, F#m7b5, etc.)
+- REMOVE musical symbols, tabs, bars
+- DO NOT rewrite or improve lyrics
+- DO NOT add new lines
+- KEEP original words only
+- Structure the song using ONLY:
+  [verse], [chorus], [bridge]
+- Start immediately with [verse]
+- Output ONLY lyrics
+"""
+
+    user_prompt = f"""
+Clean and structure this song text:
+
+{raw_text}
+"""
+
+    result = client.predict(
+        message=user_prompt,
+        system_prompt=system_prompt,
+        temperature=0.1,
+        max_new_tokens=800,
+        api_name="/chat"
+    )
+
+    text = result[0] if isinstance(result, list) else str(result)
+    return normalize_lyrics(text)
+
+# ======================================================
 # MAIN UI
 # ======================================================
 
-st.subheader("📝 Descrizione Canzone")
+st.subheader("📝 Descrizione (opzionale)")
 description = st.text_area(
-    "Tema / messaggio",
-    value="Una canzone sull'immigrazione e la libertà"
+    "Tema o contesto della canzone",
+    value="Una canzone sulla libertà e il viaggio"
 )
-
-# ================================
-# FORM TESTO
-# ================================
 
 st.markdown("---")
 st.subheader("🎤 Testo Canzone")
 
 lyrics_text = ""
+
+# ======================================================
+# MODALITÀ
+# ======================================================
 
 if lyrics_mode == "✍️ Manuale (già formattato)":
     lyrics_text = st.text_area(
@@ -130,49 +118,55 @@ if lyrics_mode == "✍️ Manuale (già formattato)":
         height=300
     )
 
-elif lyrics_mode == "🧹 Formatta testo esistente (rimuove accordi)":
-    raw_text = st.text_area(
-        "Incolla testo / spartito / accordi",
-        height=300,
-        placeholder="C  G  Am  F\nQuando cammino solo per la strada..."
-    )
-
-    if st.button("🧹 Pulisci e formatta"):
-        cleaned = remove_chords(raw_text)
-        structured = auto_structure_lyrics(cleaned)
-        lyrics_text = normalize_lyrics(structured)
-
-        st.success("✅ Testo convertito")
-        st.code(lyrics_text)
-
-elif lyrics_mode == "🤖 Automatica (LLaMA-2)":
-    if st.button("🤖 Genera Testo"):
-        with st.spinner("Generazione in corso..."):
+elif lyrics_mode == "🤖 Genera testo (LLaMA)":
+    if st.button("🤖 Genera testo"):
+        with st.spinner("Generazione testo..."):
             client = Client("huggingface-projects/llama-2-13b-chat")
             result = client.predict(
                 message=f"Write song lyrics about {description}. Use [verse] and [chorus] only.",
+                temperature=0.6,
+                max_new_tokens=700,
                 api_name="/chat"
             )
             lyrics_text = normalize_lyrics(result[0])
             st.code(lyrics_text)
 
+elif lyrics_mode == "🧹 Formatta testo esistente (AI rimuove accordi)":
+    raw_text = st.text_area(
+        "Incolla testo / spartito / accordi",
+        height=300,
+        placeholder="""
+C   G   Am   F
+Quando cammino solo per la strada
+C           G
+Cerco una casa che non ho
+"""
+    )
+
+    if st.button("🧠 Pulisci e formatta con AI"):
+        with st.spinner("AI sta rimuovendo accordi..."):
+            lyrics_text = ai_clean_and_structure(raw_text)
+            st.success("✅ Accordi rimossi e testo strutturato")
+            st.code(lyrics_text)
+
 # ======================================================
-# VALIDAZIONE
+# VALIDAZIONE FINALE
 # ======================================================
 
 st.markdown("---")
 if lyrics_text:
-    if not is_valid_lyrics(lyrics_text):
-        st.error("❌ Testo non valido: servono almeno [verse] e [chorus]")
+    if is_valid_lyrics(lyrics_text):
+        st.success("🎉 Testo PRONTO per la generazione musicale")
     else:
-        st.success("✅ Testo pronto per la generazione musicale")
+        st.error("❌ Testo non valido: servono almeno [verse] e [chorus]")
 
 # ======================================================
 # FOOTER
 # ======================================================
 st.markdown("""
-<div style='text-align:center;color:#666;padding:20px;'>
+<hr>
+<div style='text-align:center;color:#777;'>
 <b>Senorix AI</b><br>
-Generazione avanzata di canzoni
+AI Song Preparation Pipeline
 </div>
 """, unsafe_allow_html=True)
