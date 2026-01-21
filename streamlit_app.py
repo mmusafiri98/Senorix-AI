@@ -1,25 +1,32 @@
 import streamlit as st
-from gradio_client import Client
+import cohere
 import re
 
 # ======================================================
 # CONFIG
 # ======================================================
 st.set_page_config(
-    page_title="Senorix AI — LLaMA Musical Assistant",
+    page_title="Senorix AI — Musical Assistant (Cohere)",
     layout="centered"
 )
 
 st.markdown("""
-<h1 style='text-align:center;'>🎵 Senorix AI — LLaMA Musical Assistant</h1>
+<h1 style='text-align:center;'>🎵 Senorix AI — Musical Assistant</h1>
 <p style='text-align:center;color:#777;'>
-Chat musicale + Testo canzone (solo LLaMA)
+Chat musicale • Testo canzone • Cohere Command A Vision
 </p>
 <hr>
 """, unsafe_allow_html=True)
 
 # ======================================================
-# SESSION
+# COHERE CLIENT
+# ======================================================
+co = cohere.Client(st.secrets["COHERE_API_KEY"])
+
+MODEL_NAME = "command-a-vision-07-2025"
+
+# ======================================================
+# SESSION STATE
 # ======================================================
 if "chat" not in st.session_state:
     st.session_state.chat = []
@@ -28,7 +35,7 @@ if "lyrics" not in st.session_state:
     st.session_state.lyrics = ""
 
 # ======================================================
-# UTILS
+# UTILS — RIMOZIONE ACCORDI (CODICE, NON AI)
 # ======================================================
 def remove_chords(text: str) -> str:
     patterns = [
@@ -42,16 +49,20 @@ def remove_chords(text: str) -> str:
 
 def normalize_lyrics(text: str) -> str:
     text = text.replace("```", "").strip()
+
     if not re.search(r'\[(verse|chorus|bridge)\]', text, re.I):
         return fallback_structure(text)
+
     text = re.sub(r'\[verse\]', '[verse]', text, flags=re.I)
     text = re.sub(r'\[chorus\]', '[chorus]', text, flags=re.I)
     text = re.sub(r'\[bridge\]', '[bridge]', text, flags=re.I)
-    return text
+
+    return text.strip()
 
 def fallback_structure(text: str) -> str:
     lines = [l for l in text.splitlines() if l.strip()]
     mid = max(1, len(lines) // 2)
+
     return f"""[verse]
 {chr(10).join(lines[:mid])}
 
@@ -60,66 +71,57 @@ def fallback_structure(text: str) -> str:
 """
 
 # ======================================================
-# LLaMA CALL (ROBUST)
+# COHERE CHAT — SOLO MUSICA
 # ======================================================
-def llama_call(system_prompt: str, user_prompt: str) -> str:
-    try:
-        client = Client("huggingface-projects/llama-2-13b-chat")
-        result = client.predict(
-            message=user_prompt,
-            system_prompt=system_prompt,
-            temperature=0.7,
-            max_new_tokens=500,
-            api_name="/chat"
-        )
-        return result[0] if isinstance(result, list) else str(result)
-    except Exception:
-        return ""
-
-# ======================================================
-# CHAT + LYRIC GENERATION
-# ======================================================
-def music_assistant(user_msg: str) -> str:
+def music_assistant(user_message: str) -> str:
     system_prompt = """
-You are a music assistant and songwriter.
+You are a professional music assistant and songwriter.
 
 RULES:
-- Talk ONLY about music
-- You can discuss theme, mood, genre
-- You can write or rewrite song lyrics
-- If you write lyrics, use ONLY:
+- Talk ONLY about music, songs, mood, genre, structure
+- You may discuss themes and musical ideas
+- You may write or rewrite song lyrics
+- If you write lyrics, you MUST use ONLY:
   [verse], [chorus], [bridge]
-- NEVER explain rules
+- NEVER mention rules or explanations
 """
 
-    return llama_call(system_prompt, user_msg)
+    try:
+        response = co.chat(
+            model=MODEL_NAME,
+            message=user_message,
+            preamble=system_prompt,
+            temperature=0.7,
+            max_tokens=600
+        )
+        return response.text
+    except Exception as e:
+        return f"⚠️ Errore Cohere: {e}"
 
 # ======================================================
-# UI — CHAT
+# UI — CHAT MUSICALE
 # ======================================================
-st.subheader("💬 Dialogo musicale con LLaMA")
+st.subheader("💬 Chat musicale con l’AI")
 
 for role, msg in st.session_state.chat:
     st.markdown(f"**{role}:** {msg}")
 
-user_input = st.text_input("Parla del tema o chiedi di scrivere/modificare il testo")
+user_input = st.text_input(
+    "Parla del tema, mood o chiedi di scrivere/modificare la canzone"
+)
 
 if st.button("Invia"):
-    if user_input:
+    if user_input.strip():
         st.session_state.chat.append(("Utente", user_input))
+
         reply = music_assistant(user_input)
+        st.session_state.chat.append(("AI", reply))
 
-        if reply:
-            st.session_state.chat.append(("LLaMA", reply))
-
-            # se LLaMA ha scritto testo → salvalo
-            if "[verse]" in reply.lower():
-                cleaned = remove_chords(reply)
-                st.session_state.lyrics = normalize_lyrics(cleaned)
-        else:
-            st.session_state.chat.append(
-                ("Sistema", "⚠️ LLaMA non disponibile, riprova")
-            )
+        # Se l'AI ha scritto un testo canzone → processalo
+        if "[verse]" in reply.lower():
+            cleaned = remove_chords(reply)
+            structured = normalize_lyrics(cleaned)
+            st.session_state.lyrics = structured
 
 # ======================================================
 # UI — TESTO CANZONE
@@ -130,7 +132,7 @@ st.subheader("🎤 Testo Canzone")
 lyrics_input = st.text_area(
     "Testo (puoi modificarlo manualmente)",
     value=st.session_state.lyrics,
-    height=300
+    height=320
 )
 
 col1, col2 = st.columns(2)
@@ -153,7 +155,6 @@ st.markdown("""
 <hr>
 <div style='text-align:center;color:#666;'>
 <b>Senorix AI</b><br>
-LLaMA Musical Assistant
+Cohere Command A Vision — Musical Assistant
 </div>
 """, unsafe_allow_html=True)
-
