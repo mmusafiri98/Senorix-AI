@@ -24,7 +24,7 @@ Chat musicale • Testo canzone • Generazione musica automatica
 # COHERE
 # ======================================================
 co = cohere.Client(st.secrets["COHERE_API_KEY"])
-MODEL_NAME = "command-r-plus"
+MODEL_NAME = "command-a-vision-07-2025"
 
 # ======================================================
 # MUSIC MODEL (HF SPACE)
