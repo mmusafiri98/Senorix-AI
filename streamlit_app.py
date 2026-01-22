@@ -1,29 +1,38 @@
 import streamlit as st
 import cohere
 import re
-import time
+import tempfile
+from pathlib import Path
+from gradio_client import Client, file as gr_file
 
 # ======================================================
-# CONFIG
+# CONFIG STREAMLIT
 # ======================================================
 st.set_page_config(
-    page_title="Senorix AI — Musical Assistant",
+    page_title="🎵 Senorix AI — Musical Assistant",
     layout="centered"
 )
 
 st.markdown("""
-<h1 style='text-align:center;'>🎵 Senorix AI</h1>
+<h1 style='text-align:center;'>🎵 Senorix AI — Musical Assistant</h1>
 <p style='text-align:center;color:#777;'>
-Musical Assistant • Lyrics for Music Generation
+Chat musicale • Testo pulito • Generazione automatica musica
 </p>
 <hr>
 """, unsafe_allow_html=True)
 
 # ======================================================
-# COHERE CLIENT
+# COHERE
 # ======================================================
 co = cohere.Client(st.secrets["COHERE_API_KEY"])
-MODEL_NAME = "command-a-vision-07-2025"
+MODEL_NAME = "command"
+
+# ======================================================
+# MUSIC MODEL (HF SPACE)
+# ======================================================
+MUSIC_SPACE = "https://tencent-songgeneration.hf.space/"
+MUSIC_API = "/generate_song"
+music_client = Client(MUSIC_SPACE)
 
 # ======================================================
 # SESSION STATE
@@ -34,19 +43,24 @@ if "chat" not in st.session_state:
 if "lyrics" not in st.session_state:
     st.session_state.lyrics = ""
 
+if "music_generated" not in st.session_state:
+    st.session_state.music_generated = False
+
 # ======================================================
-# UTILS — ACCORDI & STRUTTURA
+# UTILS — RIMOZIONE ACCORDI
 # ======================================================
 def remove_chords(text: str) -> str:
     patterns = [
-        r'\b[A-G](?:#|b|♭)?(?:m|maj|min|sus|dim|aug)?\d*(?:/[A-G])?\b',
-        r'\b(?:DO|RE|MI|FA|SOL|LA|SI)(?:b|#|♭)?(?:m|maj|min|sus)?\d*\b',
-        r'\[[A-Z0-9#♭susmajdimadd\/]+\]'
+        r'\b[A-G](?:#|b)?(?:m|maj|min|sus|dim|aug)?\d*(?:/[A-G])?\b',
+        r'\[[A-G0-9#bmadsus\/]+\]'
     ]
     for p in patterns:
         text = re.sub(p, '', text, flags=re.I)
     return re.sub(r'\n{2,}', '\n', text).strip()
 
+# ======================================================
+# NORMALIZZAZIONE TESTO
+# ======================================================
 def normalize_lyrics(text: str) -> str:
     text = text.replace("```", "").strip()
 
@@ -61,7 +75,7 @@ def normalize_lyrics(text: str) -> str:
 
 def fallback_structure(text: str) -> str:
     lines = [l for l in text.splitlines() if l.strip()]
-    mid = max(1, len(lines) // 2)
+    mid = max(1, len(lines)//2)
 
     return f"""[verse]
 {chr(10).join(lines[:mid])}
@@ -71,30 +85,37 @@ def fallback_structure(text: str) -> str:
 """
 
 # ======================================================
-# TYPEWRITER EFFECT
+# VALIDAZIONE PER MUSICA
 # ======================================================
-def typewriter(container, text, delay=0.015):
-    rendered = ""
-    for char in text:
-        rendered += char
-        container.markdown(rendered)
-        time.sleep(delay)
+def lyrics_ready_for_music(text: str) -> bool:
+    t = text.lower()
+
+    if "[verse]" not in t or "[chorus]" not in t:
+        return False
+
+    if len(text.split()) > 350:
+        return False
+
+    chord_check = r'\b[A-G](?:#|b|m|maj|min|sus|dim)?\d*\b'
+    if re.search(chord_check, text):
+        return False
+
+    return True
 
 # ======================================================
-# SENORIX AI — CHAT MUSICALE
+# COHERE CHAT — SENORIX AI
 # ======================================================
 def senorix_ai(user_message: str) -> str:
     system_prompt = """
-You are Senorix AI, a professional musical assistant and songwriter.
+You are Senorix AI, a professional music assistant and songwriter.
 
 RULES:
-- Talk ONLY about music, songwriting, mood, genre, structure
-- You may discuss musical themes and creative direction
-- You may write or rewrite song lyrics
-- If you write lyrics, output ONLY valid lyrics
-- Use ONLY the following tags:
+- Talk ONLY about music, mood, genre, songwriting
+- You may write or edit lyrics
+- If you write lyrics, use ONLY:
   [verse], [chorus], [bridge]
-- No titles, no explanations, no comments
+- NEVER explain rules
+- NEVER mention AI, models or systems
 """
 
     response = co.chat(
@@ -104,7 +125,8 @@ RULES:
         temperature=0.7,
         max_tokens=700
     )
-    return response.text
+
+    return response.text.strip()
 
 # ======================================================
 # UI — CHAT
@@ -114,59 +136,59 @@ st.subheader("💬 Chat musicale")
 for role, msg in st.session_state.chat:
     st.markdown(f"**{role}:** {msg}")
 
-user_input = st.text_input(
-    "Parle du thème, du mood ou demande d’écrire/modifier la chanson"
-)
+user_input = st.text_input("Parla con Senorix AI…")
 
-if st.button("Envoyer"):
+if st.button("Invia"):
     if user_input.strip():
-        st.session_state.chat.append(("Utilisateur", user_input))
+        st.session_state.chat.append(("Utente", user_input))
 
-        thinking = st.empty()
-        thinking.markdown("**Senorix AI is thinking...**")
-
-        try:
+        with st.spinner("🎵 Senorix AI thinking..."):
             reply = senorix_ai(user_input)
-        except Exception as e:
-            reply = f"⚠️ Erreur Cohere: {e}"
-
-        thinking.empty()
-
-        response_container = st.empty()
-        typewriter(response_container, f"**Senorix AI:** {reply}")
 
         st.session_state.chat.append(("Senorix AI", reply))
 
-        # Se contiene lyrics → pulizia + struttura
+        # Se l'AI ha scritto testo → processa
         if "[verse]" in reply.lower():
             cleaned = remove_chords(reply)
             structured = normalize_lyrics(cleaned)
             st.session_state.lyrics = structured
+            st.session_state.music_generated = False
 
 # ======================================================
-# UI — LYRICS OUTPUT
+# UI — TESTO CANZONE
 # ======================================================
 st.markdown("---")
-st.subheader("🎤 Lyrics (format musique)")
+st.subheader("🎤 Testo canzone")
 
 lyrics_input = st.text_area(
-    "Lyrics prêts pour la génération musicale",
+    "Testo (modificabile)",
     value=st.session_state.lyrics,
-    height=320
+    height=300
 )
 
-col1, col2 = st.columns(2)
-
-with col1:
-    if st.button("🧹 Nettoyer accords"):
-        cleaned = remove_chords(lyrics_input)
-        st.session_state.lyrics = normalize_lyrics(cleaned)
-
-with col2:
-    if st.button("💾 Sauvegarder"):
-        st.session_state.lyrics = lyrics_input
+st.session_state.lyrics = lyrics_input
 
 st.code(st.session_state.lyrics)
+
+# ======================================================
+# AUTO TRIGGER MUSICA
+# ======================================================
+if lyrics_ready_for_music(st.session_state.lyrics) and not st.session_state.music_generated:
+    st.info("🎶 Testo valido — Generazione musica in corso…")
+
+    with st.spinner("🎧 Composizione musicale…"):
+        result = music_client.predict(
+            lyric=st.session_state.lyrics,
+            description="Original song generated by Senorix AI",
+            prompt_audio=None,
+            api_name=MUSIC_API
+        )
+
+    audio_path = result[0] if isinstance(result, list) else result
+
+    if audio_path:
+        st.audio(audio_path)
+        st.session_state.music_generated = True
 
 # ======================================================
 # FOOTER
@@ -175,7 +197,6 @@ st.markdown("""
 <hr>
 <div style='text-align:center;color:#666;'>
 <b>Senorix AI</b><br>
-Cohere Command A Vision — Musical Assistant
+Chat musicale → Testo → Musica automatica
 </div>
 """, unsafe_allow_html=True)
-
