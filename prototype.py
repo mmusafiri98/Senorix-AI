@@ -1,295 +1,445 @@
 import streamlit as st
-from gradio_client import Client, file as gr_file
-import tempfile
-from pathlib import Path
-import time
+import cohere
 import re
+import time
+import traceback
+from gradio_client import Client
 
 # ======================================================
 # PAGE CONFIG
 # ======================================================
 st.set_page_config(
-    page_title="Senorix AI — Song Generation",
+    page_title="Senorix AI — Stable Music Generator",
     layout="centered"
 )
 
-# ======================================================
-# STYLE
-# ======================================================
-st.markdown("""
-<style>
-.main-header {
-    text-align: center;
-    padding: 22px;
-    background: linear-gradient(135deg, #667eea, #764ba2);
-    color: white;
-    border-radius: 14px;
-    margin-bottom: 30px;
-}
-.stButton>button {
-    width: 100%;
-    background-color: #667eea;
-    color: white;
-    font-weight: bold;
-    border-radius: 12px;
-    padding: 14px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div class="main-header">
-<h1>🎵 Senorix AI — Song Generation</h1>
-<p>Lyrics AI + Music Generation</p>
-</div>
-""", unsafe_allow_html=True)
+st.title("🎵 Senorix AI — Stable Music Generator")
+st.caption("Lyrics → Format sécurisé → Génération musicale stable (DiffRhythm2)")
 
 # ======================================================
-# SIDEBAR
+# COHERE
 # ======================================================
-st.sidebar.header("⚙️ Configurazione")
-
-lyrics_mode = st.sidebar.radio(
-    "🎤 Generazione parole",
-    ["🤖 Automatica (LLaMA-2)", "✍️ Manuale"],
-    index=0
-)
-
-st.sidebar.markdown("---")
-
-space_url_song = st.sidebar.text_input(
-    "🎹 Tencent Song Space",
-    value="https://tencent-songgeneration.hf.space/"
-)
-
-api_name_song = st.sidebar.text_input(
-    "🎵 Endpoint musica",
-    value="/generate_song"
-)
+co = cohere.Client(st.secrets["COHERE_API_KEY"])
+MODEL_NAME = "command-a-vision-07-2025"
 
 # ======================================================
-# LYRICS UTILS
+# DIFFRHYTHM2
 # ======================================================
+MUSIC_SPACE = "ASLP-lab/DiffRhythm2"
+MUSIC_API = "/infer_music"
 
-def normalize_lyrics(text: str) -> str:
-    """
-    Rende SEMPRE valido l'output dell'AI se possibile
-    """
-    if not text:
-        return ""
+try:
+    music_client = Client(MUSIC_SPACE)
+    st.success("Connecté à DiffRhythm2")
+except Exception as e:
+    st.error(f"Impossible de connecter DiffRhythm2: {e}")
+    music_client = None
 
-    # rimuove markdown
-    text = text.replace("```", "").strip()
+# ======================================================
+# CONSTANTES
+# ======================================================
+MAX_WORDS = 220
+MAX_LINES = 20
+SAFE_STEPS = 16
+SAFE_CFG = 1.3
+FILE_TYPE = "mp3"
 
-    # rimuove qualsiasi testo prima del primo tag
-    match = re.search(r'\[(verse|chorus|bridge)\]', text, re.I)
-    if match:
-        text = text[match.start():]
+# ======================================================
+# SESSION STATE
+# ======================================================
+for key in ["lyrics", "audio", "generated"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
 
-    # normalizza i tag
-    text = re.sub(r'\[verse\]', '[verse]', text, flags=re.I)
-    text = re.sub(r'\[chorus\]', '[chorus]', text, flags=re.I)
-    text = re.sub(r'\[bridge\]', '[bridge]', text, flags=re.I)
-
+# ======================================================
+# UTILS
+# ======================================================
+def clean_text(text):
+    """Remove code blocks and chords"""
+    text = text.replace("```", "")
+    text = re.sub(r'\b[A-G](#|b|m|maj|min|sus|dim)?\d*\b', '', text)
     return text.strip()
 
+def enforce_limits(text):
+    """Enforce word and line limits"""
+    words = text.split()
+    if len(words) > MAX_WORDS:
+        text = " ".join(words[:MAX_WORDS])
+        st.warning(f"Texte tronqué à {MAX_WORDS} mots")
 
-def is_valid_lyrics(text: str) -> bool:
-    """
-    Valido se contiene almeno verse + chorus
-    """
-    t = text.lower()
-    return "[verse]" in t and "[chorus]" in t
+    lines = [l for l in text.splitlines() if l.strip()]
+    if len(lines) > MAX_LINES:
+        lines = lines[:MAX_LINES]
+        st.warning(f"Texte tronqué à {MAX_LINES} lignes")
 
+    return "\n".join(lines)
 
-def default_lyrics() -> str:
-    """Fallback sicuro"""
-    return """[verse]
-Attraverso mari senza nome
-Con una valigia di speranza
-Ogni passo rompe il silenzio
-Ogni sogno chiede una chance
+def safe_lrc_structure(text):
+    """Create valid LRC structure for DiffRhythm2"""
+    lines = [l for l in text.splitlines() if l.strip()]
 
-[chorus]
-Siamo liberi di camminare
-Senza catene né confini
-Ogni popolo è un orizzonte
-Ogni voce un nuovo inizio
+    if not lines:
+        return "[start]\n[intro]\n[verse]\nEmpty song\n[chorus]\nEmpty chorus\n[outro]"
 
-[verse]
-Lingue diverse, stessi battiti
-Occhi pieni di verità
-Nel viaggio nasce il futuro
-Nell'incontro la libertà
+    # Split into verse and chorus
+    mid = max(1, len(lines) // 2)
+    verse_lines = lines[:mid]
+    chorus_lines = lines[mid:] if mid < len(lines) else lines[:2]
 
-[chorus]
-Siamo liberi di camminare
-Senza catene né confini
-Ogni popolo è un orizzonte
-Ogni voce un nuovo inizio
-"""
+    # Build LRC format
+    lrc_parts = [
+        "[start]",
+        "[intro]",
+        "",
+        "[verse]"
+    ]
+    lrc_parts.extend(verse_lines)
+    lrc_parts.extend(["", "[chorus]"])
+    lrc_parts.extend(chorus_lines)
+    lrc_parts.extend(["", "[outro]"])
+    
+    return "\n".join(lrc_parts)
+
+def prepare_lyrics(text):
+    """Full preparation pipeline"""
+    text = clean_text(text)
+    text = enforce_limits(text)
+    return safe_lrc_structure(text)
+
+def lyrics_are_valid(text):
+    """Validate lyrics"""
+    if not text or not text.strip():
+        return False
+    words = text.split()
+    if len(words) < 10:
+        return False
+    if len(words) > MAX_WORDS:
+        return False
+    return True
 
 # ======================================================
-# AI GENERATION
+# COHERE LYRICS GENERATION
 # ======================================================
-
-def generate_lyrics_with_llama(description: str) -> str:
-    """
-    Generazione ROBUSTA con LLaMA-2
-    """
-    st.info("🔄 Connessione a LLaMA-2-13B-Chat…")
-
-    client = Client("huggingface-projects/llama-2-13b-chat")
-
-    system_prompt = (
-        "You are a professional songwriter.\n"
-        "You must ONLY output song lyrics.\n"
-        "You must NEVER explain.\n"
-        "You must start immediately with [verse] or [chorus]."
-    )
-
-    user_prompt = f"""
-Write a song about:
-
-\"{description}\"
-
-STRICT RULES:
-- Output ONLY lyrics
-- Use ONLY: [verse], [chorus], [bridge]
-- Start IMMEDIATELY with a tag
-- No titles, no comments
-- 2–6 lines per section
-"""
+def generate_lyrics(prompt):
+    """Generate lyrics with Cohere"""
+    system = """You are a professional songwriter.
+Write short emotional lyrics.
+Rules:
+- NO chords
+- MAX 2 sections (verse + chorus)
+- Simple lines
+- Emotional
+- Total: max 16 lines"""
 
     try:
-        raw = client.predict(
-            message=user_prompt,
-            system_prompt=system_prompt,
-            max_new_tokens=700,
-            temperature=0.65,
-            top_p=0.9,
-            repetition_penalty=1.1,
-            api_name="/chat"
+        response = co.chat(
+            model=MODEL_NAME,
+            message=f"Write a song about: {prompt}",
+            preamble=system,
+            temperature=0.7,
+            max_tokens=300
         )
+        return response.text.strip()
     except Exception as e:
-        st.error(f"❌ Errore AI: {e}")
-        return default_lyrics()
-
-    # estrazione testo
-    if isinstance(raw, list):
-        raw_text = raw[0]
-    else:
-        raw_text = str(raw)
-
-    # NORMALIZZAZIONE
-    cleaned = normalize_lyrics(raw_text)
-
-    # VALIDAZIONE
-    if not is_valid_lyrics(cleaned):
-        st.warning("⚠️ Output AI non strutturato, uso fallback")
-        return default_lyrics()
-
-    st.success("✅ Parole generate correttamente")
-    return cleaned
-
+        st.error(f"Erreur Cohere: {e}")
+        return ""
 
 # ======================================================
-# MAIN UI
+# MUSIC GENERATION
 # ======================================================
+def generate_music_safe(lyrics, mood, genre):
+    """Generate music with detailed error handling"""
+    if not music_client:
+        st.error("Client musical non disponible")
+        return None
 
-st.subheader("📝 Descrizione canzone")
+    # Prepare lyrics
+    lrc = prepare_lyrics(lyrics)
+    
+    # Show generated LRC (debug)
+    with st.expander("Debug: Format LRC Généré"):
+        st.code(lrc)
+    
+    # Build prompt
+    prompt = f"{genre}, {mood}"
+    
+    st.info(f"Envoi à DiffRhythm2...")
+    st.info(f"Prompt: {prompt}")
+    st.info(f"Steps: {SAFE_STEPS}, CFG: {SAFE_CFG}")
 
-description = st.text_area(
-    "Tema, emozione, messaggio",
-    value="Una canzone sull'immigrazione e sulla libertà di esplorare nuovi popoli",
-    height=120
-)
+    try:
+        # First attempt with normal parameters
+        st.info("Tentative 1: Paramètres normaux...")
+        
+        result = music_client.predict(
+            lrc=lrc,
+            audio_prompt=None,
+            text_prompt=prompt,
+            seed=0,
+            randomize_seed=True,
+            steps=SAFE_STEPS,
+            cfg_strength=SAFE_CFG,
+            file_type=FILE_TYPE,
+            odeint_method="euler",
+            api_name=MUSIC_API
+        )
+        
+        st.success("Génération complétée!")
+        
+        # Debug: show result
+        with st.expander("Debug: Réponse API"):
+            st.write("Type:", type(result))
+            st.write("Contenu:", result)
+        
+        # Extract audio path
+        if isinstance(result, (list, tuple)) and len(result) > 0:
+            return result[0]
+        elif isinstance(result, str):
+            return result
+        else:
+            st.error(f"Format de réponse invalide: {type(result)}")
+            return None
 
-uploaded_audio = st.file_uploader(
-    "🎧 Audio di riferimento (opzionale)",
-    type=["mp3", "wav", "ogg"]
-)
+    except Exception as e:
+        # Show REAL error instead of hiding it
+        error_msg = str(e)
+        st.error(f"Erreur spécifique: {error_msg}")
+        
+        # Show full stack trace
+        with st.expander("Stack Trace Complet"):
+            st.code(traceback.format_exc())
+        
+        # Fallback only if GPU error
+        if "gpu" in error_msg.lower() or "memory" in error_msg.lower():
+            st.warning("Tentative avec paramètres réduits...")
+            try:
+                result = music_client.predict(
+                    lrc=lrc,
+                    audio_prompt=None,
+                    text_prompt="ambient, simple",
+                    seed=0,
+                    randomize_seed=True,
+                    steps=8,
+                    cfg_strength=1.0,
+                    file_type="mp3",
+                    odeint_method="euler",
+                    api_name=MUSIC_API
+                )
+                
+                if isinstance(result, (list, tuple)) and len(result) > 0:
+                    return result[0]
+                elif isinstance(result, str):
+                    return result
+                    
+            except Exception as e2:
+                st.error(f"Fallback échoué: {str(e2)}")
+                return None
+        else:
+            st.error("Vérifiez le format LRC dans l'expander debug ci-dessus")
+            return None
 
-if lyrics_mode == "✍️ Manuale":
-    manual_lyrics = st.text_area(
-        "✍️ Inserisci le parole",
-        height=300
+# ======================================================
+# UI - LYRICS GENERATION
+# ======================================================
+st.markdown("### Génération de Paroles")
+
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    user_prompt = st.text_input(
+        "Décris ta chanson",
+        placeholder="ex: une chanson triste sur l'amour perdu..."
     )
 
+with col2:
+    generate_lyrics_btn = st.button("Générer", use_container_width=True)
+
+if generate_lyrics_btn and user_prompt:
+    with st.spinner("Écriture des paroles..."):
+        lyrics = generate_lyrics(user_prompt)
+        if lyrics:
+            st.session_state.lyrics = lyrics
+            st.session_state.generated = False
+            st.success("Paroles générées!")
+
+# ======================================================
+# UI - LYRICS EDITOR
+# ======================================================
 st.markdown("---")
-generate_button = st.button("🎛️ GENERA CANZONE")
+st.markdown("### Paroles")
+
+lyrics_input = st.text_area(
+    "Paroles (modifiables)",
+    value=st.session_state.lyrics or "",
+    height=250,
+    help="Les paroles seront automatiquement formatées pour DiffRhythm2"
+)
+
+st.session_state.lyrics = lyrics_input
+
+# Stats
+if lyrics_input:
+    words = len(lyrics_input.split())
+    lines = len([l for l in lyrics_input.splitlines() if l.strip()])
+    
+    col_stat1, col_stat2, col_stat3 = st.columns(3)
+    with col_stat1:
+        st.metric("Mots", words, delta=f"Max: {MAX_WORDS}")
+    with col_stat2:
+        st.metric("Lignes", lines, delta=f"Max: {MAX_LINES}")
+    with col_stat3:
+        valid = "Valide" if lyrics_are_valid(lyrics_input) else "Invalide"
+        st.metric("Status", valid)
 
 # ======================================================
-# PIPELINE
+# UI - MUSIC PARAMETERS
 # ======================================================
+st.markdown("---")
+st.markdown("### Paramètres Musicaux")
 
-if generate_button:
-    if not description.strip():
-        st.error("❌ Inserisci una descrizione")
-        st.stop()
+col_genre, col_mood = st.columns(2)
 
-    # STEP 1 — LYRICS
-    st.markdown("## 🎼 Step 1 — Parole")
+with col_genre:
+    genre = st.selectbox(
+        "Genre",
+        ["Pop", "Rock", "Electronic", "Jazz", "Ambient", "Classical", "Hip-Hop"]
+    )
 
-    if lyrics_mode == "✍️ Manuale":
-        lyrics_text = manual_lyrics
+with col_mood:
+    mood = st.selectbox(
+        "Mood",
+        ["Happy", "Sad", "Calm", "Romantic", "Energetic", "Melancholic"]
+    )
+
+# Advanced parameters
+with st.expander("Paramètres Avancés"):
+    col_steps, col_cfg = st.columns(2)
+    
+    with col_steps:
+        custom_steps = st.slider(
+            "Steps (qualité)",
+            min_value=8,
+            max_value=24,
+            value=SAFE_STEPS,
+            step=4
+        )
+    
+    with col_cfg:
+        custom_cfg = st.slider(
+            "CFG Strength",
+            min_value=0.8,
+            max_value=2.0,
+            value=SAFE_CFG,
+            step=0.1
+        )
+    
+    use_custom = st.checkbox("Utiliser paramètres personnalisés", value=False)
+    
+    if use_custom:
+        SAFE_STEPS = custom_steps
+        SAFE_CFG = custom_cfg
+
+st.markdown("---")
+
+# ======================================================
+# UI - MUSIC GENERATION
+# ======================================================
+generate_music_btn = st.button(
+    "GÉNÉRER LA MUSIQUE",
+    type="primary",
+    use_container_width=True
+)
+
+if generate_music_btn:
+    if not lyrics_are_valid(lyrics_input):
+        st.error("""Paroles invalides
+        
+Les paroles doivent:
+- Contenir au moins 10 mots
+- Ne pas dépasser 220 mots
+- Ne pas être vides""")
     else:
-        with st.spinner("Generazione parole…"):
-            lyrics_text = generate_lyrics_with_llama(description)
+        # Progress bar
+        progress = st.progress(0)
+        status = st.empty()
+        
+        for i in range(100):
+            time.sleep(0.02)
+            progress.progress(i + 1)
+            if i < 30:
+                status.text("Préparation du format LRC...")
+            elif i < 60:
+                status.text("Génération musicale...")
+            else:
+                status.text("Finalisation...")
+        
+        # Generate music
+        with st.spinner("Composition en cours..."):
+            audio = generate_music_safe(lyrics_input, mood, genre)
+        
+        progress.empty()
+        status.empty()
+        
+        if audio:
+            st.success("Musique générée avec succès!")
+            
+            st.markdown("### Écouter")
+            st.audio(audio)
+            
+            st.session_state.audio = audio
+            st.session_state.generated = True
+            
+            # Download button
+            try:
+                with open(audio, "rb") as f:
+                    st.download_button(
+                        label=f"Télécharger {FILE_TYPE.upper()}",
+                        data=f.read(),
+                        file_name=f"senorix_{genre.lower()}_{int(time.time())}.{FILE_TYPE}",
+                        mime=f"audio/{FILE_TYPE}",
+                        use_container_width=True
+                    )
+            except Exception as e:
+                st.warning(f"Download non disponible: {e}")
+        else:
+            st.error("""Génération échouée
+            
+Vérifiez:
+1. Le format LRC dans l'expander debug
+2. Les erreurs spécifiques affichées ci-dessus
+3. Que DiffRhythm2 est connecté
 
-    st.code(lyrics_text)
+Essayez de:
+- Réduire la longueur des paroles
+- Simplifier le texte
+- Utiliser des paramètres plus bas""")
 
-    # STEP 2 — MUSIC
-    st.markdown("## 🎵 Step 2 — Musica")
-
-    client_song = Client(space_url_song)
-
-    prompt_audio = None
-    if uploaded_audio:
-        tmp = tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=Path(uploaded_audio.name).suffix
-        )
-        tmp.write(uploaded_audio.getbuffer())
-        tmp.close()
-        prompt_audio = gr_file(tmp.name)
-
-    with st.spinner("🎶 Generazione musica…"):
-        song_result = client_song.predict(
-            lyric=lyrics_text,
-            description=description,
-            prompt_audio=prompt_audio,
-            api_name=api_name_song
-        )
-
-    # STEP 3 — OUTPUT
-    st.markdown("## 🎧 Risultato")
-
-    audio_path = None
-    if isinstance(song_result, (list, tuple)):
-        audio_path = song_result[0]
-    elif isinstance(song_result, str):
-        audio_path = song_result
-
-    if audio_path:
-        st.audio(audio_path)
-        with open(audio_path, "rb") as f:
+# Show last generation
+if st.session_state.audio and not generate_music_btn:
+    st.markdown("---")
+    st.markdown("### Dernière Génération")
+    st.audio(st.session_state.audio)
+    
+    try:
+        with open(st.session_state.audio, "rb") as f:
             st.download_button(
-                "⬇️ Scarica canzone",
-                f.read(),
-                file_name="senorix_song.wav",
-                mime="audio/wav"
+                label=f"Télécharger {FILE_TYPE.upper()}",
+                data=f.read(),
+                file_name=f"senorix_song.{FILE_TYPE}",
+                mime=f"audio/{FILE_TYPE}",
+                use_container_width=True
             )
-    else:
-        st.warning("⚠️ Nessun audio restituito")
+    except:
+        pass
 
 # ======================================================
 # FOOTER
 # ======================================================
 st.markdown("---")
-st.markdown(
-    "<div style='text-align:center;color:#666;'>"
-    "🎵 <b>Senorix AI</b> — LLaMA-2 + Tencent Song Generation"
-    "</div>",
-    unsafe_allow_html=True
-)
+st.markdown("""
+<div style='text-align:center;color:#666;'>
+<b>Senorix AI</b><br>
+Powered by Cohere + DiffRhythm2<br>
+<small>Version avec Debug Détaillé</small>
+</div>
+""", unsafe_allow_html=True)
