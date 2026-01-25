@@ -6,7 +6,66 @@ import traceback
 from gradio_client import Client
 
 # ======================================================
-# PAGE CONFIG
+# 🔐 LOGIN CONFIG (À MODIFIER)
+# ======================================================
+VALID_USERS = {
+    "admin": "admin123",
+    "senorix": "music2025"
+}
+
+# ======================================================
+# SESSION STATE INIT
+# ======================================================
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+# ======================================================
+# 🔐 LOGIN UI
+# ======================================================
+def login_screen():
+    st.set_page_config(
+        page_title="Senorix AI — Login",
+        layout="centered"
+    )
+
+    st.title("🔐 Senorix AI")
+    st.caption("Connexion requise")
+
+    with st.form("login_form"):
+        username = st.text_input("Nom d'utilisateur")
+        password = st.text_input("Mot de passe", type="password")
+        submit = st.form_submit_button("Se connecter")
+
+    if submit:
+        if username in VALID_USERS and VALID_USERS[username] == password:
+            st.session_state.logged_in = True
+            st.session_state.username = username
+            st.success("Connexion réussie")
+            st.rerun()
+        else:
+            st.error("Identifiants incorrects")
+
+# ======================================================
+# 🚪 LOGOUT
+# ======================================================
+def logout_button():
+    if st.sidebar.button("🚪 Déconnexion"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.rerun()
+
+# ======================================================
+# 🔒 BLOQUER L’APP SI NON CONNECTÉ
+# ======================================================
+if not st.session_state.logged_in:
+    login_screen()
+    st.stop()
+
+# ======================================================
+# PAGE CONFIG (APP)
 # ======================================================
 st.set_page_config(
     page_title="Senorix AI — Stable Music Generator",
@@ -14,7 +73,9 @@ st.set_page_config(
 )
 
 st.title("🎵 Senorix AI — Stable Music Generator")
-st.caption("Lyrics → Format LRC strict → DiffRhythm2")
+st.caption(f"Connecté en tant que **{st.session_state.username}**")
+
+logout_button()
 
 # ======================================================
 # COHERE
@@ -45,95 +106,67 @@ SAFE_CFG = 1.3
 FILE_TYPE = "mp3"
 
 # ======================================================
-# SESSION STATE
+# SESSION STATE APP
 # ======================================================
 for key in ["lyrics", "audio"]:
     if key not in st.session_state:
         st.session_state[key] = ""
 
 # ======================================================
-# 🔒 LYRICS SECURITY PIPELINE
+# 🔒 LYRICS PIPELINE
 # ======================================================
-def clean_text(text: str) -> str:
+def clean_text(text):
     text = text.replace("```", "")
     text = re.sub(r'\b[A-G](#|b|m|maj|min|sus|dim)?\d*\b', '', text)
     return text.strip()
 
-def enforce_limits(text: str) -> str:
+def enforce_limits(text):
     words = text.split()
     if len(words) > MAX_WORDS:
         text = " ".join(words[:MAX_WORDS])
-        st.warning("✂️ Paroles tronquées (max mots)")
 
     lines = [l for l in text.splitlines() if l.strip()]
     if len(lines) > MAX_LINES:
         lines = lines[:MAX_LINES]
-        st.warning("✂️ Paroles tronquées (max lignes)")
 
     return "\n".join(lines)
 
-# ======================================================
-# 🔒 STRICT LRC FORMATTER
-# ======================================================
-def force_lrc_format(raw_text: str) -> str:
-    """
-    FORCE le format exact :
-    [start]
-    [intro]
-    [verse]
-    ...
-    [chorus]
-    ...
-    [verse]
-    ...
-    [outro]
-    """
-
+def force_lrc_format(raw_text):
     lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
     if len(lines) < 8:
         lines += ["..."] * (8 - len(lines))
 
-    # Découpage logique
     verse1 = lines[0:4]
     chorus1 = lines[4:8]
-    verse2 = lines[8:12] if len(lines) >= 12 else lines[0:4]
-    chorus2 = chorus1
+    verse2 = lines[8:12] if len(lines) >= 12 else verse1
     outro = lines[-2:]
 
     lrc = [
         "[start]",
         "[intro]",
         "",
-        "[verse]",
-        *verse1,
+        "[verse]", *verse1,
         "",
-        "[chorus]",
-        *chorus1,
+        "[chorus]", *chorus1,
         "",
-        "[verse]",
-        *verse2,
+        "[verse]", *verse2,
         "",
-        "[chorus]",
-        *chorus2,
+        "[chorus]", *chorus1,
         "",
-        "[outro]",
-        *outro
+        "[outro]", *outro
     ]
-
     return "\n".join(lrc)
 
-def prepare_lyrics(text: str) -> str:
-    text = clean_text(text)
-    text = enforce_limits(text)
-    return force_lrc_format(text)
+def prepare_lyrics(text):
+    return force_lrc_format(enforce_limits(clean_text(text)))
 
-def lyrics_are_valid(text: str) -> bool:
+def lyrics_are_valid(text):
     return text and len(text.split()) >= 10
 
 # ======================================================
-# 🎤 COHERE LYRICS GENERATION
+# 🎤 COHERE
 # ======================================================
-def generate_lyrics(prompt: str) -> str:
+def generate_lyrics(prompt):
     system = """
 You are a songwriter.
 Write emotional lyrics.
@@ -144,7 +177,6 @@ Rules:
 - No section labels
 - 12–16 lines
 """
-
     try:
         r = co.chat(
             model=MODEL_NAME,
@@ -154,29 +186,23 @@ Rules:
             max_tokens=300
         )
         return r.text.strip()
-    except Exception as e:
-        st.error(f"Cohere error: {e}")
+    except:
         return ""
 
 # ======================================================
-# 🎶 MUSIC GENERATION
+# 🎶 MUSIC
 # ======================================================
 def generate_music(lyrics, mood, genre):
-    if not music_client:
-        return None
-
     lrc = prepare_lyrics(lyrics)
 
-    with st.expander("🧪 LRC FINAL ENVOYÉ"):
+    with st.expander("🧪 LRC ENVOYÉ"):
         st.code(lrc)
-
-    prompt = f"{genre}, {mood}"
 
     try:
         result = music_client.predict(
             lrc=lrc,
             audio_prompt=None,
-            text_prompt=prompt,
+            text_prompt=f"{genre}, {mood}",
             seed=0,
             randomize_seed=True,
             steps=SAFE_STEPS,
@@ -185,49 +211,34 @@ def generate_music(lyrics, mood, genre):
             odeint_method="euler",
             api_name=MUSIC_API
         )
-
-        if isinstance(result, (list, tuple)):
-            return result[0]
-        return result
-
+        return result[0] if isinstance(result, (list, tuple)) else result
     except Exception as e:
         st.error(str(e))
-        with st.expander("Trace"):
-            st.code(traceback.format_exc())
         return None
 
 # ======================================================
-# UI — LYRICS
+# UI
 # ======================================================
 st.markdown("### ✍️ Génération des paroles")
 
 prompt = st.text_input("Décris ta chanson")
 
 if st.button("Générer paroles"):
-    with st.spinner("Écriture..."):
-        st.session_state.lyrics = generate_lyrics(prompt)
+    st.session_state.lyrics = generate_lyrics(prompt)
 
 lyrics_input = st.text_area(
-    "Paroles (libres — format forcé automatiquement)",
+    "Paroles",
     value=st.session_state.lyrics,
     height=260
 )
 
-st.session_state.lyrics = lyrics_input
-
-# ======================================================
-# UI — MUSIC
-# ======================================================
 genre = st.selectbox("Genre", ["Pop", "Rock", "Ambient", "Hip-Hop"])
 mood = st.selectbox("Mood", ["Sad", "Happy", "Romantic", "Calm"])
 
 if st.button("🎵 GÉNÉRER LA MUSIQUE", type="primary"):
-    if not lyrics_are_valid(lyrics_input):
-        st.error("Paroles insuffisantes")
-    else:
+    if lyrics_are_valid(lyrics_input):
         with st.spinner("Composition musicale..."):
             audio = generate_music(lyrics_input, mood, genre)
-
         if audio:
             st.audio(audio)
             with open(audio, "rb") as f:
@@ -237,13 +248,14 @@ if st.button("🎵 GÉNÉRER LA MUSIQUE", type="primary"):
                     file_name=f"senorix_{int(time.time())}.mp3",
                     mime="audio/mp3"
                 )
+    else:
+        st.error("Paroles insuffisantes")
 
 # ======================================================
 # FOOTER
 # ======================================================
 st.markdown("---")
 st.markdown(
-    "<center><b>Senorix AI</b><br>Format LRC strict • DiffRhythm2</center>",
+    "<center><b>Senorix AI</b><br>Accès sécurisé • DiffRhythm2</center>",
     unsafe_allow_html=True
 )
-
