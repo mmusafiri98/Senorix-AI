@@ -14,7 +14,7 @@ st.set_page_config(
 )
 
 st.title("🎵 Senorix AI — Stable Music Generator")
-st.caption("Lyrics → Format sécurisé → Génération musicale stable (DiffRhythm2)")
+st.caption("Lyrics → Format LRC strict → DiffRhythm2")
 
 # ======================================================
 # COHERE
@@ -30,16 +30,16 @@ MUSIC_API = "/infer_music"
 
 try:
     music_client = Client(MUSIC_SPACE)
-    st.success("Connecté à DiffRhythm2")
+    st.success("✅ Connecté à DiffRhythm2")
 except Exception as e:
-    st.error(f"Impossible de connecter DiffRhythm2: {e}")
+    st.error(f"❌ DiffRhythm2 indisponible : {e}")
     music_client = None
 
 # ======================================================
 # CONSTANTES
 # ======================================================
 MAX_WORDS = 220
-MAX_LINES = 20
+MAX_LINES = 22
 SAFE_STEPS = 16
 SAFE_CFG = 1.3
 FILE_TYPE = "mp3"
@@ -47,130 +47,132 @@ FILE_TYPE = "mp3"
 # ======================================================
 # SESSION STATE
 # ======================================================
-for key in ["lyrics", "audio", "generated"]:
+for key in ["lyrics", "audio"]:
     if key not in st.session_state:
-        st.session_state[key] = None
+        st.session_state[key] = ""
 
 # ======================================================
-# UTILS
+# 🔒 LYRICS SECURITY PIPELINE
 # ======================================================
-def clean_text(text):
-    """Remove code blocks and chords"""
+def clean_text(text: str) -> str:
     text = text.replace("```", "")
     text = re.sub(r'\b[A-G](#|b|m|maj|min|sus|dim)?\d*\b', '', text)
     return text.strip()
 
-def enforce_limits(text):
-    """Enforce word and line limits"""
+def enforce_limits(text: str) -> str:
     words = text.split()
     if len(words) > MAX_WORDS:
         text = " ".join(words[:MAX_WORDS])
-        st.warning(f"Texte tronqué à {MAX_WORDS} mots")
+        st.warning("✂️ Paroles tronquées (max mots)")
 
     lines = [l for l in text.splitlines() if l.strip()]
     if len(lines) > MAX_LINES:
         lines = lines[:MAX_LINES]
-        st.warning(f"Texte tronqué à {MAX_LINES} lignes")
+        st.warning("✂️ Paroles tronquées (max lignes)")
 
     return "\n".join(lines)
 
-def safe_lrc_structure(text):
-    """Create valid LRC structure for DiffRhythm2"""
-    lines = [l for l in text.splitlines() if l.strip()]
+# ======================================================
+# 🔒 STRICT LRC FORMATTER
+# ======================================================
+def force_lrc_format(raw_text: str) -> str:
+    """
+    FORCE le format exact :
+    [start]
+    [intro]
+    [verse]
+    ...
+    [chorus]
+    ...
+    [verse]
+    ...
+    [outro]
+    """
 
-    if not lines:
-        return "[start]\n[intro]\n[verse]\nEmpty song\n[chorus]\nEmpty chorus\n[outro]"
+    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+    if len(lines) < 8:
+        lines += ["..."] * (8 - len(lines))
 
-    # Split into verse and chorus
-    mid = max(1, len(lines) // 2)
-    verse_lines = lines[:mid]
-    chorus_lines = lines[mid:] if mid < len(lines) else lines[:2]
+    # Découpage logique
+    verse1 = lines[0:4]
+    chorus1 = lines[4:8]
+    verse2 = lines[8:12] if len(lines) >= 12 else lines[0:4]
+    chorus2 = chorus1
+    outro = lines[-2:]
 
-    # Build LRC format
-    lrc_parts = [
+    lrc = [
         "[start]",
         "[intro]",
         "",
-        "[verse]"
+        "[verse]",
+        *verse1,
+        "",
+        "[chorus]",
+        *chorus1,
+        "",
+        "[verse]",
+        *verse2,
+        "",
+        "[chorus]",
+        *chorus2,
+        "",
+        "[outro]",
+        *outro
     ]
-    lrc_parts.extend(verse_lines)
-    lrc_parts.extend(["", "[chorus]"])
-    lrc_parts.extend(chorus_lines)
-    lrc_parts.extend(["", "[outro]"])
-    
-    return "\n".join(lrc_parts)
 
-def prepare_lyrics(text):
-    """Full preparation pipeline"""
+    return "\n".join(lrc)
+
+def prepare_lyrics(text: str) -> str:
     text = clean_text(text)
     text = enforce_limits(text)
-    return safe_lrc_structure(text)
+    return force_lrc_format(text)
 
-def lyrics_are_valid(text):
-    """Validate lyrics"""
-    if not text or not text.strip():
-        return False
-    words = text.split()
-    if len(words) < 10:
-        return False
-    if len(words) > MAX_WORDS:
-        return False
-    return True
+def lyrics_are_valid(text: str) -> bool:
+    return text and len(text.split()) >= 10
 
 # ======================================================
-# COHERE LYRICS GENERATION
+# 🎤 COHERE LYRICS GENERATION
 # ======================================================
-def generate_lyrics(prompt):
-    """Generate lyrics with Cohere"""
-    system = """You are a professional songwriter.
-Write short emotional lyrics.
+def generate_lyrics(prompt: str) -> str:
+    system = """
+You are a songwriter.
+Write emotional lyrics.
 Rules:
 - NO chords
-- MAX 2 sections (verse + chorus)
-- Simple lines
-- Emotional
-- Total: max 16 lines"""
+- Short lines
+- Simple English
+- No section labels
+- 12–16 lines
+"""
 
     try:
-        response = co.chat(
+        r = co.chat(
             model=MODEL_NAME,
-            message=f"Write a song about: {prompt}",
+            message=f"Write lyrics about: {prompt}",
             preamble=system,
             temperature=0.7,
             max_tokens=300
         )
-        return response.text.strip()
+        return r.text.strip()
     except Exception as e:
-        st.error(f"Erreur Cohere: {e}")
+        st.error(f"Cohere error: {e}")
         return ""
 
 # ======================================================
-# MUSIC GENERATION
+# 🎶 MUSIC GENERATION
 # ======================================================
-def generate_music_safe(lyrics, mood, genre):
-    """Generate music with detailed error handling"""
+def generate_music(lyrics, mood, genre):
     if not music_client:
-        st.error("Client musical non disponible")
         return None
 
-    # Prepare lyrics
     lrc = prepare_lyrics(lyrics)
-    
-    # Show generated LRC (debug)
-    with st.expander("Debug: Format LRC Généré"):
+
+    with st.expander("🧪 LRC FINAL ENVOYÉ"):
         st.code(lrc)
-    
-    # Build prompt
+
     prompt = f"{genre}, {mood}"
-    
-    st.info(f"Envoi à DiffRhythm2...")
-    st.info(f"Prompt: {prompt}")
-    st.info(f"Steps: {SAFE_STEPS}, CFG: {SAFE_CFG}")
 
     try:
-        # First attempt with normal parameters
-        st.info("Tentative 1: Paramètres normaux...")
-        
         result = music_client.predict(
             lrc=lrc,
             audio_prompt=None,
@@ -183,264 +185,65 @@ def generate_music_safe(lyrics, mood, genre):
             odeint_method="euler",
             api_name=MUSIC_API
         )
-        
-        st.success("Génération complétée!")
-        
-        # Debug: show result
-        with st.expander("Debug: Réponse API"):
-            st.write("Type:", type(result))
-            st.write("Contenu:", result)
-        
-        # Extract audio path
-        if isinstance(result, (list, tuple)) and len(result) > 0:
+
+        if isinstance(result, (list, tuple)):
             return result[0]
-        elif isinstance(result, str):
-            return result
-        else:
-            st.error(f"Format de réponse invalide: {type(result)}")
-            return None
+        return result
 
     except Exception as e:
-        # Show REAL error instead of hiding it
-        error_msg = str(e)
-        st.error(f"Erreur spécifique: {error_msg}")
-        
-        # Show full stack trace
-        with st.expander("Stack Trace Complet"):
+        st.error(str(e))
+        with st.expander("Trace"):
             st.code(traceback.format_exc())
-        
-        # Fallback only if GPU error
-        if "gpu" in error_msg.lower() or "memory" in error_msg.lower():
-            st.warning("Tentative avec paramètres réduits...")
-            try:
-                result = music_client.predict(
-                    lrc=lrc,
-                    audio_prompt=None,
-                    text_prompt="ambient, simple",
-                    seed=0,
-                    randomize_seed=True,
-                    steps=8,
-                    cfg_strength=1.0,
-                    file_type="mp3",
-                    odeint_method="euler",
-                    api_name=MUSIC_API
-                )
-                
-                if isinstance(result, (list, tuple)) and len(result) > 0:
-                    return result[0]
-                elif isinstance(result, str):
-                    return result
-                    
-            except Exception as e2:
-                st.error(f"Fallback échoué: {str(e2)}")
-                return None
-        else:
-            st.error("Vérifiez le format LRC dans l'expander debug ci-dessus")
-            return None
+        return None
 
 # ======================================================
-# UI - LYRICS GENERATION
+# UI — LYRICS
 # ======================================================
-st.markdown("### Génération de Paroles")
+st.markdown("### ✍️ Génération des paroles")
 
-col1, col2 = st.columns([3, 1])
+prompt = st.text_input("Décris ta chanson")
 
-with col1:
-    user_prompt = st.text_input(
-        "Décris ta chanson",
-        placeholder="ex: une chanson triste sur l'amour perdu..."
-    )
-
-with col2:
-    generate_lyrics_btn = st.button("Générer", use_container_width=True)
-
-if generate_lyrics_btn and user_prompt:
-    with st.spinner("Écriture des paroles..."):
-        lyrics = generate_lyrics(user_prompt)
-        if lyrics:
-            st.session_state.lyrics = lyrics
-            st.session_state.generated = False
-            st.success("Paroles générées!")
-
-# ======================================================
-# UI - LYRICS EDITOR
-# ======================================================
-st.markdown("---")
-st.markdown("### Paroles")
+if st.button("Générer paroles"):
+    with st.spinner("Écriture..."):
+        st.session_state.lyrics = generate_lyrics(prompt)
 
 lyrics_input = st.text_area(
-    "Paroles (modifiables)",
-    value=st.session_state.lyrics or "",
-    height=250,
-    help="Les paroles seront automatiquement formatées pour DiffRhythm2"
+    "Paroles (libres — format forcé automatiquement)",
+    value=st.session_state.lyrics,
+    height=260
 )
 
 st.session_state.lyrics = lyrics_input
 
-# Stats
-if lyrics_input:
-    words = len(lyrics_input.split())
-    lines = len([l for l in lyrics_input.splitlines() if l.strip()])
-    
-    col_stat1, col_stat2, col_stat3 = st.columns(3)
-    with col_stat1:
-        st.metric("Mots", words, delta=f"Max: {MAX_WORDS}")
-    with col_stat2:
-        st.metric("Lignes", lines, delta=f"Max: {MAX_LINES}")
-    with col_stat3:
-        valid = "Valide" if lyrics_are_valid(lyrics_input) else "Invalide"
-        st.metric("Status", valid)
-
 # ======================================================
-# UI - MUSIC PARAMETERS
+# UI — MUSIC
 # ======================================================
-st.markdown("---")
-st.markdown("### Paramètres Musicaux")
+genre = st.selectbox("Genre", ["Pop", "Rock", "Ambient", "Hip-Hop"])
+mood = st.selectbox("Mood", ["Sad", "Happy", "Romantic", "Calm"])
 
-col_genre, col_mood = st.columns(2)
-
-with col_genre:
-    genre = st.selectbox(
-        "Genre",
-        ["Pop", "Rock", "Electronic", "Jazz", "Ambient", "Classical", "Hip-Hop"]
-    )
-
-with col_mood:
-    mood = st.selectbox(
-        "Mood",
-        ["Happy", "Sad", "Calm", "Romantic", "Energetic", "Melancholic"]
-    )
-
-# Advanced parameters
-with st.expander("Paramètres Avancés"):
-    col_steps, col_cfg = st.columns(2)
-    
-    with col_steps:
-        custom_steps = st.slider(
-            "Steps (qualité)",
-            min_value=8,
-            max_value=24,
-            value=SAFE_STEPS,
-            step=4
-        )
-    
-    with col_cfg:
-        custom_cfg = st.slider(
-            "CFG Strength",
-            min_value=0.8,
-            max_value=2.0,
-            value=SAFE_CFG,
-            step=0.1
-        )
-    
-    use_custom = st.checkbox("Utiliser paramètres personnalisés", value=False)
-    
-    if use_custom:
-        SAFE_STEPS = custom_steps
-        SAFE_CFG = custom_cfg
-
-st.markdown("---")
-
-# ======================================================
-# UI - MUSIC GENERATION
-# ======================================================
-generate_music_btn = st.button(
-    "GÉNÉRER LA MUSIQUE",
-    type="primary",
-    use_container_width=True
-)
-
-if generate_music_btn:
+if st.button("🎵 GÉNÉRER LA MUSIQUE", type="primary"):
     if not lyrics_are_valid(lyrics_input):
-        st.error("""Paroles invalides
-        
-Les paroles doivent:
-- Contenir au moins 10 mots
-- Ne pas dépasser 220 mots
-- Ne pas être vides""")
+        st.error("Paroles insuffisantes")
     else:
-        # Progress bar
-        progress = st.progress(0)
-        status = st.empty()
-        
-        for i in range(100):
-            time.sleep(0.02)
-            progress.progress(i + 1)
-            if i < 30:
-                status.text("Préparation du format LRC...")
-            elif i < 60:
-                status.text("Génération musicale...")
-            else:
-                status.text("Finalisation...")
-        
-        # Generate music
-        with st.spinner("Composition en cours..."):
-            audio = generate_music_safe(lyrics_input, mood, genre)
-        
-        progress.empty()
-        status.empty()
-        
+        with st.spinner("Composition musicale..."):
+            audio = generate_music(lyrics_input, mood, genre)
+
         if audio:
-            st.success("Musique générée avec succès!")
-            
-            st.markdown("### Écouter")
             st.audio(audio)
-            
-            st.session_state.audio = audio
-            st.session_state.generated = True
-            
-            # Download button
-            try:
-                with open(audio, "rb") as f:
-                    st.download_button(
-                        label=f"Télécharger {FILE_TYPE.upper()}",
-                        data=f.read(),
-                        file_name=f"senorix_{genre.lower()}_{int(time.time())}.{FILE_TYPE}",
-                        mime=f"audio/{FILE_TYPE}",
-                        use_container_width=True
-                    )
-            except Exception as e:
-                st.warning(f"Download non disponible: {e}")
-        else:
-            st.error("""Génération échouée
-            
-Vérifiez:
-1. Le format LRC dans l'expander debug
-2. Les erreurs spécifiques affichées ci-dessus
-3. Que DiffRhythm2 est connecté
-
-Essayez de:
-- Réduire la longueur des paroles
-- Simplifier le texte
-- Utiliser des paramètres plus bas""")
-
-# Show last generation
-if st.session_state.audio and not generate_music_btn:
-    st.markdown("---")
-    st.markdown("### Dernière Génération")
-    st.audio(st.session_state.audio)
-    
-    try:
-        with open(st.session_state.audio, "rb") as f:
-            st.download_button(
-                label=f"Télécharger {FILE_TYPE.upper()}",
-                data=f.read(),
-                file_name=f"senorix_song.{FILE_TYPE}",
-                mime=f"audio/{FILE_TYPE}",
-                use_container_width=True
-            )
-    except:
-        pass
+            with open(audio, "rb") as f:
+                st.download_button(
+                    "Télécharger MP3",
+                    f.read(),
+                    file_name=f"senorix_{int(time.time())}.mp3",
+                    mime="audio/mp3"
+                )
 
 # ======================================================
 # FOOTER
 # ======================================================
 st.markdown("---")
-st.markdown("""
-<div style='text-align:center;color:#666;'>
-<b>Senorix AI</b><br>
-Powered by Cohere + DiffRhythm2<br>
-<small>Version avec Debug Détaillé</small>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    "<center><b>Senorix AI</b><br>Format LRC strict • DiffRhythm2</center>",
+    unsafe_allow_html=True
+)
 
