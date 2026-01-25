@@ -54,7 +54,11 @@ if not st.session_state.logged_in:
 # ======================================================
 # PAGE CONFIG
 # ======================================================
-st.set_page_config(page_title="Senorix AI — Stable Music Generator", layout="centered")
+st.set_page_config(
+    page_title="Senorix AI — Stable Music Generator",
+    layout="centered"
+)
+
 st.title("🎵 Senorix AI — Stable Music Generator")
 st.caption(f"Connecté en tant que **{st.session_state.username}**")
 logout()
@@ -70,14 +74,11 @@ MODEL_NAME = "command-a-vision-07-2025"
 # ======================================================
 MUSIC_SPACE = "ASLP-lab/DiffRhythm2"
 MUSIC_API = "/infer_music"
-
 music_client = Client(MUSIC_SPACE)
 
 # ======================================================
 # CONSTANTES
 # ======================================================
-MAX_WORDS = 220
-MAX_LINES = 22
 SAFE_STEPS = 16
 SAFE_CFG = 1.3
 FILE_TYPE = "mp3"
@@ -125,33 +126,41 @@ MOODS = [
 ]
 
 # ======================================================
-# LYRICS PIPELINE
+# 🎵 LRC FORMATTER (CORRIGÉ)
 # ======================================================
-def prepare_lyrics(text):
+def prepare_lyrics(text: str) -> str:
     text = re.sub(r'\b[A-G](#|b|m|maj|min|sus|dim)?\d*\b', '', text)
     lines = [l.strip() for l in text.splitlines() if l.strip()]
+
     if len(lines) < 8:
         lines += ["..."] * (8 - len(lines))
 
-    return "\n".join([
+    verse1 = lines[:4]
+    chorus = lines[4:8]
+    verse2 = lines[8:12] if len(lines) >= 12 else verse1
+    outro = lines[-2:]
+
+    lrc = [
         "[start]",
         "[intro]",
         "",
-        "[verse]", *lines[:4],
+        "[verse]", *verse1,
         "",
-        "[chorus]", *lines[4:8],
+        "[chorus]", *chorus,
         "",
-        "[verse]", *lines[8:12] if len(lines) >= 12 else *lines[:4],
+        "[verse]", *verse2,
         "",
-        "[chorus]", *lines[4:8],
+        "[chorus]", *chorus,
         "",
-        "[outro]", *lines[-2:]
-    ])
+        "[outro]", *outro
+    ]
+
+    return "\n".join(lrc)
 
 # ======================================================
-# COHERE LYRICS
+# 🎤 COHERE LYRICS
 # ======================================================
-def generate_lyrics(prompt):
+def generate_lyrics(prompt: str) -> str:
     system = """
 Write emotional song lyrics.
 No chords.
@@ -168,11 +177,12 @@ No labels.
     return r.text.strip()
 
 # ======================================================
-# MUSIC GENERATION
+# 🎶 MUSIC GENERATION
 # ======================================================
 def generate_music(lyrics, genre, mood, voice):
     lrc = prepare_lyrics(lyrics)
-    with st.expander("🧪 LRC"):
+
+    with st.expander("🧪 LRC envoyé à DiffRhythm2"):
         st.code(lrc)
 
     prompt = f"{genre}, {mood}, {VOICE_MAP[voice]}, emotional singing"
@@ -196,14 +206,20 @@ def generate_music(lyrics, genre, mood, voice):
 # UI
 # ======================================================
 st.markdown("### ✍️ Paroles")
+
 prompt = st.text_input("Décris ta chanson")
 
 if st.button("Générer les paroles"):
-    st.session_state.lyrics = generate_lyrics(prompt)
+    st.session_state["lyrics"] = generate_lyrics(prompt)
 
-lyrics = st.text_area("Paroles", value=st.session_state.get("lyrics", ""), height=260)
+lyrics = st.text_area(
+    "Paroles (formatées automatiquement)",
+    value=st.session_state.get("lyrics", ""),
+    height=260
+)
 
 st.markdown("### 🎼 Paramètres musicaux")
+
 genre = st.selectbox("Genre musical", GENRES)
 mood = st.selectbox("Mood", MOODS)
 voice = st.selectbox("Voix chantée", list(VOICE_MAP.keys()))
@@ -211,20 +227,22 @@ voice = st.selectbox("Voix chantée", list(VOICE_MAP.keys()))
 if st.button("🎵 GÉNÉRER LA MUSIQUE", type="primary"):
     with st.spinner("Composition musicale..."):
         audio = generate_music(lyrics, genre, mood, voice)
-    st.audio(audio)
-    with open(audio, "rb") as f:
-        st.download_button(
-            "Télécharger MP3",
-            f.read(),
-            file_name=f"senorix_{genre}_{voice}.mp3",
-            mime="audio/mp3"
-        )
+
+    if audio:
+        st.audio(audio)
+        with open(audio, "rb") as f:
+            st.download_button(
+                "Télécharger MP3",
+                f.read(),
+                file_name=f"senorix_{genre}_{voice}_{int(time.time())}.mp3",
+                mime="audio/mp3"
+            )
 
 # ======================================================
 # FOOTER
 # ======================================================
 st.markdown("---")
 st.markdown(
-    "<center><b>Senorix AI</b><br>World Genres • Global Moods • DiffRhythm2</center>",
+    "<center><b>Senorix AI</b><br>World Genres • Global Moods • Voice Control • DiffRhythm2</center>",
     unsafe_allow_html=True
 )
