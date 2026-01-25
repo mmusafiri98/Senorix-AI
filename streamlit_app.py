@@ -117,6 +117,23 @@ def lyrics_are_valid(text):
         return False
     return True
 
+def build_text_prompt(genre, mood, voice_type):
+    """Build text prompt with voice type"""
+    # Map voice types to descriptive terms
+    voice_map = {
+        "Baritone (Voix masculine moyenne)": "male baritone vocals",
+        "Baritenor (Voix masculine medium-haute)": "male baritenor vocals",
+        "Bass (Voix masculine grave)": "male bass vocals, deep voice",
+        "Tenor (Voix masculine haute)": "male tenor vocals, high male voice",
+        "Mezzosoprano (Voix féminine moyenne)": "female mezzo-soprano vocals",
+        "Soprano (Voix féminine haute)": "female soprano vocals, high female voice",
+        "Contralto (Voix féminine grave)": "female contralto vocals, low female voice"
+    }
+    
+    voice_desc = voice_map.get(voice_type, "vocals")
+    
+    return f"{genre}, {voice_desc}, {mood}"
+
 # ======================================================
 # COHERE LYRICS GENERATION
 # ======================================================
@@ -147,7 +164,7 @@ Rules:
 # ======================================================
 # MUSIC GENERATION
 # ======================================================
-def generate_music_safe(lyrics, mood, genre):
+def generate_music_safe(lyrics, mood, genre, voice_type):
     """Generate music with detailed error handling"""
     if not music_client:
         st.error("Client musical non disponible")
@@ -160,8 +177,8 @@ def generate_music_safe(lyrics, mood, genre):
     with st.expander("Debug: Format LRC Généré"):
         st.code(lrc)
     
-    # Build prompt
-    prompt = f"{genre}, {mood}"
+    # Build prompt with voice type
+    prompt = build_text_prompt(genre, mood, voice_type)
     
     st.info(f"Envoi à DiffRhythm2...")
     st.info(f"Prompt: {prompt}")
@@ -219,7 +236,7 @@ def generate_music_safe(lyrics, mood, genre):
                     text_prompt="ambient, simple",
                     seed=0,
                     randomize_seed=True,
-                    steps=8,
+                    steps=10,
                     cfg_strength=1.0,
                     file_type="mp3",
                     odeint_method="euler",
@@ -241,7 +258,7 @@ def generate_music_safe(lyrics, mood, genre):
 # ======================================================
 # UI - LYRICS GENERATION
 # ======================================================
-st.markdown("### Génération de Paroles")
+st.markdown("### ✍️ Génération de Paroles")
 
 col1, col2 = st.columns([3, 1])
 
@@ -252,21 +269,21 @@ with col1:
     )
 
 with col2:
-    generate_lyrics_btn = st.button("Générer", use_container_width=True)
+    generate_lyrics_btn = st.button("🎼 Générer", use_container_width=True)
 
 if generate_lyrics_btn and user_prompt:
-    with st.spinner("Écriture des paroles..."):
+    with st.spinner("✍️ Écriture des paroles..."):
         lyrics = generate_lyrics(user_prompt)
         if lyrics:
             st.session_state.lyrics = lyrics
             st.session_state.generated = False
-            st.success("Paroles générées!")
+            st.success("✅ Paroles générées!")
 
 # ======================================================
 # UI - LYRICS EDITOR
 # ======================================================
 st.markdown("---")
-st.markdown("### Paroles")
+st.markdown("### 📝 Paroles")
 
 lyrics_input = st.text_area(
     "Paroles (modifiables)",
@@ -288,40 +305,74 @@ if lyrics_input:
     with col_stat2:
         st.metric("Lignes", lines, delta=f"Max: {MAX_LINES}")
     with col_stat3:
-        valid = "Valide" if lyrics_are_valid(lyrics_input) else "Invalide"
+        valid = "✅ Valide" if lyrics_are_valid(lyrics_input) else "❌ Invalide"
         st.metric("Status", valid)
 
 # ======================================================
 # UI - MUSIC PARAMETERS
 # ======================================================
 st.markdown("---")
-st.markdown("### Paramètres Musicaux")
+st.markdown("### 🎚️ Paramètres Musicaux")
 
 col_genre, col_mood = st.columns(2)
 
 with col_genre:
     genre = st.selectbox(
         "Genre",
-        ["Pop", "Rock", "Electronic", "Jazz", "Ambient", "Classical", "Hip-Hop"]
+        ["Pop", "Rock", "Electronic", "Jazz", "Ambient", "Classical", "Hip-Hop", "R&B", "Country", "Folk"]
     )
 
 with col_mood:
     mood = st.selectbox(
         "Mood",
-        ["Happy", "Sad", "Calm", "Romantic", "Energetic", "Melancholic"]
+        ["Happy", "Sad", "Calm", "Romantic", "Energetic", "Melancholic", "Dramatic", "Peaceful"]
     )
 
+# NEW: Voice Type Selection
+st.markdown("#### 🎤 Type de Voix")
+
+voice_type = st.selectbox(
+    "Choisissez le type de voix",
+    [
+        "Baritone (Voix masculine moyenne)",
+        "Baritenor (Voix masculine medium-haute)",
+        "Bass (Voix masculine grave)",
+        "Tenor (Voix masculine haute)",
+        "Mezzosoprano (Voix féminine moyenne)",
+        "Soprano (Voix féminine haute)",
+        "Contralto (Voix féminine grave)"
+    ],
+    index=0,
+    help="Sélectionnez le registre vocal pour la chanson"
+)
+
+# Info box about voice types
+with st.expander("ℹ️ Guide des Types de Voix"):
+    st.markdown("""
+    **Voix Masculines:**
+    - **Bass (Grave)**: Voix la plus grave, puissante et profonde (E2-E4)
+    - **Baritone (Moyen)**: Voix masculine standard, polyvalente (A2-A4)
+    - **Baritenor (Medium-Haut)**: Entre baritone et tenor, riche (C3-C5)
+    - **Tenor (Aigu)**: Voix masculine la plus haute, brillante (C3-C5)
+    
+    **Voix Féminines:**
+    - **Contralto (Grave)**: Voix féminine la plus grave, rare (F3-F5)
+    - **Mezzosoprano (Moyen)**: Voix féminine standard, chaleureuse (A3-A5)
+    - **Soprano (Aigu)**: Voix féminine la plus haute, claire (C4-C6)
+    """)
+
 # Advanced parameters
-with st.expander("Paramètres Avancés"):
+with st.expander("⚙️ Paramètres Avancés"):
     col_steps, col_cfg = st.columns(2)
     
     with col_steps:
         custom_steps = st.slider(
             "Steps (qualité)",
-            min_value=8,
+            min_value=10,
             max_value=24,
             value=SAFE_STEPS,
-            step=4
+            step=2,
+            help="Plus élevé = meilleure qualité mais plus lent"
         )
     
     with col_cfg:
@@ -330,7 +381,8 @@ with st.expander("Paramètres Avancés"):
             min_value=0.8,
             max_value=2.0,
             value=SAFE_CFG,
-            step=0.1
+            step=0.1,
+            help="Contrôle l'adhérence au prompt"
         )
     
     use_custom = st.checkbox("Utiliser paramètres personnalisés", value=False)
@@ -345,14 +397,14 @@ st.markdown("---")
 # UI - MUSIC GENERATION
 # ======================================================
 generate_music_btn = st.button(
-    "GÉNÉRER LA MUSIQUE",
+    "🎧 GÉNÉRER LA MUSIQUE",
     type="primary",
     use_container_width=True
 )
 
 if generate_music_btn:
     if not lyrics_are_valid(lyrics_input):
-        st.error("""Paroles invalides
+        st.error("""❌ **Paroles invalides**
         
 Les paroles doivent:
 - Contenir au moins 10 mots
@@ -367,23 +419,23 @@ Les paroles doivent:
             time.sleep(0.02)
             progress.progress(i + 1)
             if i < 30:
-                status.text("Préparation du format LRC...")
+                status.text("🎵 Préparation du format LRC...")
             elif i < 60:
-                status.text("Génération musicale...")
+                status.text("🎹 Génération musicale...")
             else:
-                status.text("Finalisation...")
+                status.text("🎚️ Finalisation...")
         
-        # Generate music
-        with st.spinner("Composition en cours..."):
-            audio = generate_music_safe(lyrics_input, mood, genre)
+        # Generate music with voice type
+        with st.spinner("🎧 Composition en cours..."):
+            audio = generate_music_safe(lyrics_input, mood, genre, voice_type)
         
         progress.empty()
         status.empty()
         
         if audio:
-            st.success("Musique générée avec succès!")
+            st.success("🎉 **Musique générée avec succès!**")
             
-            st.markdown("### Écouter")
+            st.markdown("### 🎧 Écouter")
             st.audio(audio)
             
             st.session_state.audio = audio
@@ -393,37 +445,38 @@ Les paroles doivent:
             try:
                 with open(audio, "rb") as f:
                     st.download_button(
-                        label=f"Télécharger {FILE_TYPE.upper()}",
+                        label=f"⬇️ Télécharger {FILE_TYPE.upper()}",
                         data=f.read(),
-                        file_name=f"senorix_{genre.lower()}_{int(time.time())}.{FILE_TYPE}",
+                        file_name=f"senorix_{genre.lower()}_{voice_type.split()[0].lower()}_{int(time.time())}.{FILE_TYPE}",
                         mime=f"audio/{FILE_TYPE}",
                         use_container_width=True
                     )
             except Exception as e:
-                st.warning(f"Download non disponible: {e}")
+                st.warning(f"⚠️ Download non disponible: {e}")
         else:
-            st.error("""Génération échouée
+            st.error("""❌ **Génération échouée**
             
-Vérifiez:
+**Vérifiez:**
 1. Le format LRC dans l'expander debug
 2. Les erreurs spécifiques affichées ci-dessus
 3. Que DiffRhythm2 est connecté
 
-Essayez de:
+**Essayez de:**
 - Réduire la longueur des paroles
 - Simplifier le texte
-- Utiliser des paramètres plus bas""")
+- Utiliser des paramètres plus bas
+- Attendre quelques minutes si GPU occupé""")
 
 # Show last generation
 if st.session_state.audio and not generate_music_btn:
     st.markdown("---")
-    st.markdown("### Dernière Génération")
+    st.markdown("### 🎵 Dernière Génération")
     st.audio(st.session_state.audio)
     
     try:
         with open(st.session_state.audio, "rb") as f:
             st.download_button(
-                label=f"Télécharger {FILE_TYPE.upper()}",
+                label=f"⬇️ Télécharger {FILE_TYPE.upper()}",
                 data=f.read(),
                 file_name=f"senorix_song.{FILE_TYPE}",
                 mime=f"audio/{FILE_TYPE}",
@@ -438,8 +491,8 @@ if st.session_state.audio and not generate_music_btn:
 st.markdown("---")
 st.markdown("""
 <div style='text-align:center;color:#666;'>
-<b>Senorix AI</b><br>
+<b>🎵 Senorix AI</b><br>
 Powered by Cohere + DiffRhythm2<br>
-<small>Version avec Debug Détaillé</small>
+<small>Version avec Sélection Type de Voix</small>
 </div>
 """, unsafe_allow_html=True)
