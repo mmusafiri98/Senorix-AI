@@ -2,7 +2,6 @@ import streamlit as st
 import cohere
 import re
 import time
-import traceback
 from gradio_client import Client
 
 # ======================================================
@@ -72,12 +71,7 @@ MODEL_NAME = "command-a-vision-07-2025"
 MUSIC_SPACE = "ASLP-lab/DiffRhythm2"
 MUSIC_API = "/infer_music"
 
-try:
-    music_client = Client(MUSIC_SPACE)
-    st.success("✅ DiffRhythm2 connecté")
-except Exception as e:
-    st.error(f"❌ DiffRhythm2 indisponible : {e}")
-    music_client = None
+music_client = Client(MUSIC_SPACE)
 
 # ======================================================
 # CONSTANTES
@@ -89,14 +83,7 @@ SAFE_CFG = 1.3
 FILE_TYPE = "mp3"
 
 # ======================================================
-# SESSION STATE APP
-# ======================================================
-for k in ["lyrics", "audio"]:
-    if k not in st.session_state:
-        st.session_state[k] = ""
-
-# ======================================================
-# 🎤 VOICE MAPPING
+# VOICES
 # ======================================================
 VOICE_MAP = {
     "Baritone": "male baritone vocal, deep warm voice",
@@ -106,162 +93,138 @@ VOICE_MAP = {
 }
 
 # ======================================================
+# GENRES & MOODS
+# ======================================================
+GENRES = [
+    "Pop", "Rock", "Hip-Hop", "Jazz", "Classical",
+    "Electronic", "Ambient", "Lo-fi", "Synthwave",
+    "Folk", "World Folk", "Celtic Folk", "Nordic Folk",
+    "African", "Afrobeat", "Latin", "Salsa", "Reggaeton",
+    "Flamenco", "Tango", "Fado",
+    "Indian Classical", "Bollywood",
+    "Arabic", "Middle Eastern",
+    "Asian Traditional", "K-Pop", "J-Pop",
+    "Gospel", "Soul", "R&B", "Funk",
+    "Blues", "Country", "Bluegrass",
+    "Metal", "Punk", "Indie",
+    "Cinematic", "Soundtrack"
+]
+
+MOODS = [
+    "Happy", "Sad", "Melancholic",
+    "Romantic", "Passionate",
+    "Calm", "Peaceful", "Relaxing",
+    "Energetic", "Powerful", "Epic",
+    "Dark", "Mysterious",
+    "Hopeful", "Inspiring",
+    "Nostalgic", "Dreamy",
+    "Spiritual", "Sacred",
+    "Aggressive", "Angry",
+    "Chill", "Warm", "Cozy",
+    "Ethereal", "Atmospheric"
+]
+
+# ======================================================
 # LYRICS PIPELINE
 # ======================================================
-def clean_text(text):
-    text = text.replace("```", "")
+def prepare_lyrics(text):
     text = re.sub(r'\b[A-G](#|b|m|maj|min|sus|dim)?\d*\b', '', text)
-    return text.strip()
-
-def enforce_limits(text):
-    words = text.split()
-    if len(words) > MAX_WORDS:
-        text = " ".join(words[:MAX_WORDS])
-    lines = [l for l in text.splitlines() if l.strip()]
-    if len(lines) > MAX_LINES:
-        lines = lines[:MAX_LINES]
-    return "\n".join(lines)
-
-def force_lrc_format(raw):
-    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
     if len(lines) < 8:
         lines += ["..."] * (8 - len(lines))
-
-    verse1 = lines[0:4]
-    chorus = lines[4:8]
-    verse2 = lines[8:12] if len(lines) >= 12 else verse1
-    outro = lines[-2:]
 
     return "\n".join([
         "[start]",
         "[intro]",
         "",
-        "[verse]", *verse1,
+        "[verse]", *lines[:4],
         "",
-        "[chorus]", *chorus,
+        "[chorus]", *lines[4:8],
         "",
-        "[verse]", *verse2,
+        "[verse]", *lines[8:12] if len(lines) >= 12 else *lines[:4],
         "",
-        "[chorus]", *chorus,
+        "[chorus]", *lines[4:8],
         "",
-        "[outro]", *outro
+        "[outro]", *lines[-2:]
     ])
 
-def prepare_lyrics(text):
-    return force_lrc_format(enforce_limits(clean_text(text)))
-
-def lyrics_are_valid(text):
-    return text and len(text.split()) >= 10
-
 # ======================================================
-# 🎤 COHERE LYRICS
+# COHERE LYRICS
 # ======================================================
 def generate_lyrics(prompt):
     system = """
-You are a songwriter.
-Write emotional lyrics.
-Rules:
-- NO chords
-- Short lines
-- Simple English
-- No section labels
-- 12–16 lines
+Write emotional song lyrics.
+No chords.
+Short lines.
+No labels.
 """
-    try:
-        r = co.chat(
-            model=MODEL_NAME,
-            message=f"Write lyrics about: {prompt}",
-            preamble=system,
-            temperature=0.7,
-            max_tokens=300
-        )
-        return r.text.strip()
-    except:
-        return ""
+    r = co.chat(
+        model=MODEL_NAME,
+        message=f"Write lyrics about: {prompt}",
+        preamble=system,
+        temperature=0.7,
+        max_tokens=300
+    )
+    return r.text.strip()
 
 # ======================================================
-# 🎶 MUSIC GENERATION
+# MUSIC GENERATION
 # ======================================================
 def generate_music(lyrics, genre, mood, voice):
     lrc = prepare_lyrics(lyrics)
-
-    with st.expander("🧪 LRC envoyé"):
+    with st.expander("🧪 LRC"):
         st.code(lrc)
 
-    voice_prompt = VOICE_MAP[voice]
-    full_prompt = f"{genre}, {mood}, {voice_prompt}, emotional singing"
+    prompt = f"{genre}, {mood}, {VOICE_MAP[voice]}, emotional singing"
 
-    try:
-        result = music_client.predict(
-            lrc=lrc,
-            audio_prompt=None,
-            text_prompt=full_prompt,
-            seed=0,
-            randomize_seed=True,
-            steps=SAFE_STEPS,
-            cfg_strength=SAFE_CFG,
-            file_type=FILE_TYPE,
-            odeint_method="euler",
-            api_name=MUSIC_API
-        )
-        return result[0] if isinstance(result, (list, tuple)) else result
-    except Exception as e:
-        st.error(str(e))
-        return None
+    result = music_client.predict(
+        lrc=lrc,
+        audio_prompt=None,
+        text_prompt=prompt,
+        seed=0,
+        randomize_seed=True,
+        steps=SAFE_STEPS,
+        cfg_strength=SAFE_CFG,
+        file_type=FILE_TYPE,
+        odeint_method="euler",
+        api_name=MUSIC_API
+    )
+
+    return result[0] if isinstance(result, (list, tuple)) else result
 
 # ======================================================
-# UI — LYRICS
+# UI
 # ======================================================
 st.markdown("### ✍️ Paroles")
-
 prompt = st.text_input("Décris ta chanson")
 
 if st.button("Générer les paroles"):
     st.session_state.lyrics = generate_lyrics(prompt)
 
-lyrics_input = st.text_area(
-    "Paroles (formatées automatiquement)",
-    value=st.session_state.lyrics,
-    height=260
-)
+lyrics = st.text_area("Paroles", value=st.session_state.get("lyrics", ""), height=260)
 
-# ======================================================
-# UI — MUSIC PARAMETERS
-# ======================================================
 st.markdown("### 🎼 Paramètres musicaux")
+genre = st.selectbox("Genre musical", GENRES)
+mood = st.selectbox("Mood", MOODS)
+voice = st.selectbox("Voix chantée", list(VOICE_MAP.keys()))
 
-genre = st.selectbox("Genre", ["Pop", "Rock", "Ambient", "Hip-Hop"])
-mood = st.selectbox("Mood", ["Sad", "Happy", "Romantic", "Calm"])
-voice = st.selectbox(
-    "Voix chantée",
-    ["Baritone", "Tenor", "Mezzo-soprano", "Soprano"]
-)
-
-# ======================================================
-# GENERATE
-# ======================================================
 if st.button("🎵 GÉNÉRER LA MUSIQUE", type="primary"):
-    if lyrics_are_valid(lyrics_input):
-        with st.spinner("Composition musicale..."):
-            audio = generate_music(lyrics_input, genre, mood, voice)
-        if audio:
-            st.audio(audio)
-            with open(audio, "rb") as f:
-                st.download_button(
-                    "Télécharger MP3",
-                    f.read(),
-                    file_name=f"senorix_{voice.lower()}_{int(time.time())}.mp3",
-                    mime="audio/mp3"
-                )
-    else:
-        st.error("Paroles insuffisantes")
+    with st.spinner("Composition musicale..."):
+        audio = generate_music(lyrics, genre, mood, voice)
+    st.audio(audio)
+    with open(audio, "rb") as f:
+        st.download_button(
+            "Télécharger MP3",
+            f.read(),
+            file_name=f"senorix_{genre}_{voice}.mp3",
+            mime="audio/mp3"
+        )
 
 # ======================================================
 # FOOTER
 # ======================================================
 st.markdown("---")
 st.markdown(
-    "<center><b>Senorix AI</b><br>Voix sélectionnable • Accès sécurisé • DiffRhythm2</center>",
+    "<center><b>Senorix AI</b><br>World Genres • Global Moods • DiffRhythm2</center>",
     unsafe_allow_html=True
 )
-
